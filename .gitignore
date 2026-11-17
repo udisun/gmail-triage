@@ -1,0 +1,6 @@
+node_modules/
+pins.json
+.superpowers/
+.claude/*
+!.claude/CLAUDE.md
+!.claude/settings.json
