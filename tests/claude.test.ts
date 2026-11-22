@@ -79,8 +79,13 @@ test('a JSON line split across two chunks parses', async () => {
 test('hung child is killed and rejected at the timeout', async () => {
   useFake('hang')
   const t0 = Date.now()
-  await assert.rejects(runClaude('p', [], 300), /timed out/)
+  await assert.rejects(runClaude('p', [], 300), /timed out after 300 ms \(last event: system\/init; stderr: empty\)$/)
   assert.ok(Date.now() - t0 < 5000)
+})
+
+test('a timeout names the last stream event and the stderr tail on one line', async () => {
+  useFake('hang-stderr')
+  await assert.rejects(runClaude('p', [], 300), (e: Error) => e.message === 'claude timed out after 300 ms (last event: system/init; stderr: API Error: Connection error)')
 })
 
 test('only allowlisted env reaches the child', async () => {
