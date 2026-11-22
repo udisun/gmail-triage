@@ -179,10 +179,11 @@ export type OpenRow = { threadId: string, from: string, subject: string, lastAt:
 export type OpenList = { total: number, rows: OpenRow[] }
 const OPEN_ROWS = 200
 
-// Read-only: inbox threads carrying each label (read or not); total counts every id, rows hold the newest OPEN_ROWS. A missing label is an empty list.
+// Read-only: inbox threads carrying each label (read or not), each thread under the first name that has it; total counts every id, rows hold the newest OPEN_ROWS. A missing label is an empty list.
 export const listOpenByLabel = async (g: gmail_v1.Gmail, names: string[], budget: RetryBudget, signal?: AbortSignal): Promise<Map<string, OpenList>> => {
   const { data } = await withRateLimitRetry(() => g.users.labels.list({ userId: 'me' }, { signal }), { budget })
   const out = new Map<string, OpenList>()
+  const seen = new Set<string>()
   for (const name of names) {
     const labelId = data.labels?.find((l) => l.name === name)?.id
     const ids: string[] = []
@@ -190,18 +191,23 @@ export const listOpenByLabel = async (g: gmail_v1.Gmail, names: string[], budget
     while (labelId) {
       const token = pageToken
       const page = (await withRateLimitRetry(() => g.users.threads.list({ userId: 'me', labelIds: ['INBOX', labelId], maxResults: LIST_PAGE, pageToken: token }, { signal }), { budget })).data
-      ids.push(...(page.threads ?? []).map((t) => t.id).filter((id): id is string => !!id))
+      ids.push(...(page.threads ?? []).map((t) => t.id).filter((id): id is string => !!id && !seen.has(id)))
       pageToken = page.nextPageToken ?? undefined
       if (!pageToken || ids.length >= COUNT_CAP) {
         break
       }
     }
+    ids.forEach((id) => seen.add(id))
     const rows: OpenRow[] = []
     const want = ids.slice(0, OPEN_ROWS)
     for (let i = 0; i < want.length; i += GET_CHUNK) {
       const settled = await Promise.allSettled(want.slice(i, i + GET_CHUNK).map((id) => withRateLimitRetry(() => g.users.threads.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject'] }, { signal }), { budget })))
       for (const r of settled) {
         if (r.status === 'rejected') {
+          // deleted between list and get: skip it rather than lose the whole section
+          if ((r.reason as { response?: { status?: number } })?.response?.status === 404) {
+            continue
+          }
           throw r.reason
         }
         const t = r.value.data

@@ -119,14 +119,13 @@ const age = (d: number): string => d === 0 ? 'today' : `${d}d ago`
 const openItem = (o: OpenRow): string =>
   `<li><a href="${esc(threadHref(o.threadId))}">${esc(clip(o.subject))}</a><div class="from">${esc(clip(o.from))}</div><div class="why">last mail ${age(o.ageDays)}</div></li>`
 
-// Today's verdicts first, then every earlier thread still in the inbox under that label; a thread on both labels shows once, under urgent.
+// Today's verdicts first, then every earlier thread still in the inbox under that label (cross-label dedupe happens at fetch). Dry verdicts are hypothetical, so they never hide a real label.
 const openSections = (r: ReportInput): Record<'urgent' | 'attention', { html: string, count: number }> => {
   const today = (b: Bucket): ReportRow[] => r.rows.filter((x) => x.bucket === b)
-  const shown = new Set(r.rows.filter((x) => x.bucket === 'urgent' || x.bucket === 'attention').map((x) => x.threadId))
+  const shown = new Set(r.mode === 'dry' ? [] : r.rows.filter((x) => x.bucket === 'urgent' || x.bucket === 'attention').map((x) => x.threadId))
   const section = (b: 'urgent' | 'attention'): { html: string, count: number } => {
     const o = r.open?.[b] ?? null
     const earlier = (o?.rows ?? []).filter((x) => !shown.has(x.threadId))
-    earlier.forEach((x) => shown.add(x.threadId))
     const more = o === null ? 0 : Math.max(0, o.total - o.rows.length)
     const tail = o === null
       ? '<p class="why">Earlier threads still in inbox: unavailable this run</p>'

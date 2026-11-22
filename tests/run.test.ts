@@ -18,7 +18,7 @@ type Spec = { id: string, from?: string, to?: string, listUnsubscribe?: string, 
 const gaxios = (status: number, reason: string): Error =>
   Object.assign(new Error('Quota exceeded SECRET'), { response: { status, data: { error: { errors: [{ reason }] } } } })
 
-const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[], throttleMinimal?: string[], throttleModify?: string[], throttleModifyOnce?: string[], newerAfterModify?: string[], throttleCounts?: boolean, throttleProfile?: boolean, throttleListAfterWrites?: boolean, stallListAfterWrites?: boolean, open?: Record<string, string[]>, failLabels?: boolean } = {}) => {
+const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[], throttleMinimal?: string[], throttleModify?: string[], throttleModifyOnce?: string[], newerAfterModify?: string[], throttleCounts?: boolean, throttleProfile?: boolean, throttleListAfterWrites?: boolean, stallListAfterWrites?: boolean, open?: Record<string, string[]>, failLabels?: boolean, gone?: string[] } = {}) => {
   const modifies: { id: string, requestBody: { addLabelIds: string[], removeLabelIds: string[] } }[] = []
   const counts: string[] = []
   const created: string[] = []
@@ -65,6 +65,9 @@ const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[
           return { data: { threads: specs.filter((s) => !archived.has(s.id)).map((s) => ({ id: s.id })), resultSizeEstimate: specs.length } }
         },
         get: async (p: { id: string, format?: string }) => {
+          if (opts.gone?.includes(p.id)) {
+            throw gaxios(404, 'notFound')
+          }
           if (p.format === 'minimal') {
             reads.minimal++
             if (opts.throttleMinimal?.includes(p.id)) {
@@ -884,4 +887,15 @@ test('a failed open-thread lookup leaves open null and still writes the report',
   assert.equal(res.input.rows.length, 1)
   assert.equal(res.input.open, null)
   assert.ok(readFileSync(res.reportFile, 'utf8').includes('unavailable this run'))
+})
+
+test('open lookup: a thread on both labels counts once, under urgent; a thread deleted mid-lookup is skipped, not fatal', async () => {
+  await saveState({ mode: 'live', artifactUrl: null, processed: { u: 'm-u', both: 'm-both', x: 'm-x' } })
+  const { g } = fakeGmail([{ id: 'u' }, { id: 'both' }, { id: 'x' }], { open: { 'Triage/Urgent': ['both', 'gone1', 'u'], 'Triage/Attention': ['both', 'x'] }, gone: ['gone1'] })
+  const res = await runTriage(mk(g, verdictsFor({})), { dryRun: false })
+  assert.ok(res?.input.open)
+  assert.deepEqual(res.input.open.urgent.rows.map((r) => r.threadId), ['both', 'u'])
+  assert.equal(res.input.open.urgent.total, 3)
+  assert.deepEqual(res.input.open.attention.rows.map((r) => r.threadId), ['x'])
+  assert.equal(res.input.open.attention.total, 1)
 })
