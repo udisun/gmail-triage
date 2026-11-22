@@ -22,7 +22,7 @@ import type { UnsubEntry } from './unsubscribe.ts'
 import type { Bucket, Pins, ThreadInput } from './types.ts'
 import { validateVerdicts } from './validate.ts'
 import { applySweep, listRecoveries, planSweep } from './sweep.ts'
-import type { SweepPlan } from './sweep.ts'
+import type { SweepPlan, SweepRow } from './sweep.ts'
 
 // The structural subset of gmail_v1.Gmail that a run uses; the real client satisfies it.
 export type GmailLike = {
@@ -154,23 +154,28 @@ const openInbox = async (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: num
   return byName === null ? null : agedOpen(byName, now)
 }
 
-// Plans the sweep from the open list; a dry run or an empty plan writes nothing, and a failed recovery lookup only drops the recovery rule.
-const sweepOpen = async (g: GmailLike, byName: Map<string, OpenList>, dry: boolean, date: string, deps: Deps, budget: RetryBudget): Promise<SweepPlan> => {
-  const recoveries = await withDeadline(deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (signal) => listRecoveries(g as unknown as gmail_v1.Gmail, budget, signal)) ?? new Map<string, number>()
-  const plan = planSweep(byName, recoveries, deps.now().getTime())
+// Plans the sweep from the open list on the run's own budget (skipped once it is spent); a dry run or an empty plan writes nothing,
+// and a failed recovery lookup only drops the recovery rule.
+const sweepOpen = async (g: GmailLike, byName: Map<string, OpenList>, dry: boolean, date: string, deps: Deps, budget: RetryBudget): Promise<{ swept: SweepPlan, failed: SweepRow[] }> => {
+  const none = { swept: { resolved: [], stale: [] }, failed: [] }
+  if (budget.exhausted) {
+    return none
+  }
+  const recoveries = await withDeadline(deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (signal) => listRecoveries(g as unknown as gmail_v1.Gmail, budget, signal))
+  if (recoveries === null) {
+    console.error('sweep: recovery lookup failed, only superseded alerts and stale threads are swept')
+  }
+  const plan = planSweep(byName, recoveries ?? new Map(), deps.now().getTime(), deps.pins)
   if (dry || plan.resolved.length + plan.stale.length === 0) {
-    return plan
+    return { swept: plan, failed: [] }
   }
   try {
     const labels = await ensureLabels(g.users.labels, retryWith(budget))
     const { done, failed } = await applySweep(g.users.threads, plan, labels, date, budget)
-    if (failed > 0) {
-      console.error(`sweep: ${failed} thread(s) not archived`)
-    }
-    return done
+    return { swept: done, failed }
   } catch {
     console.error('sweep: could not resolve its labels, nothing archived')
-    return { resolved: [], stale: [] }
+    return none
   }
 }
 
@@ -357,7 +362,12 @@ export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<
     const countBudget = () => createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep })
     const rawOpen = await withDeadline(deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (signal) => listOpenByLabel(g as unknown as gmail_v1.Gmail, OPEN_NAMES, countBudget(), signal))
     // the sweep archives before the count, so the split and the open list match the inbox it leaves
-    const swept = rawOpen === null ? null : await sweepOpen(g, rawOpen, dry, date, deps, countBudget())
+    const sweep = rawOpen === null ? null : await sweepOpen(g, rawOpen, dry, date, deps, budget)
+    const swept = sweep?.swept ?? null
+    for (const r of sweep?.failed ?? []) {
+      failed.push(r.threadId)
+      failedRows.push({ threadId: r.threadId, from: r.from, subject: r.subject, reason: 'sweep archive failed' })
+    }
     const open = rawOpen === null ? null : agedOpen(rawOpen, deps.now(), dry || swept === null ? new Set() : new Set([...swept.resolved, ...swept.stale].map((r) => r.threadId)))
     const inbox = await countInbox(g as unknown as gmail_v1.Gmail, countBudget(), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (id) => keptToday.has(id) ? 'today' : state.processed[id] !== undefined && !touched.has(id) ? 'earlier' : 'triage')
     // the dry run's own decisions, never derived from the listing

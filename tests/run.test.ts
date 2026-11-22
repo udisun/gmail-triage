@@ -13,12 +13,12 @@ beforeEach(() => {
   process.env.GMAIL_TRIAGE_HOME = mkdtempSync(join(tmpdir(), 'gt-run-'))
 })
 
-type Spec = { id: string, from?: string, to?: string, listUnsubscribe?: string, listUnsubscribePost?: string, direct?: boolean, autoSubmitted?: string, earlierHuman?: boolean, subject?: string, at?: string, listId?: string, readMsg?: boolean, labels?: string[] }
+type Spec = { id: string, from?: string, to?: string, listUnsubscribe?: string, listUnsubscribePost?: string, direct?: boolean, autoSubmitted?: string, earlierHuman?: boolean, subject?: string, at?: string, listId?: string, readMsg?: boolean, labels?: string[], read?: boolean, outOfInbox?: boolean }
 
 const gaxios = (status: number, reason: string): Error =>
   Object.assign(new Error('Quota exceeded SECRET'), { response: { status, data: { error: { errors: [{ reason }] } } } })
 
-const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[], throttleMinimal?: string[], throttleModify?: string[], throttleModifyOnce?: string[], newerAfterModify?: string[], throttleCounts?: boolean, throttleProfile?: boolean, throttleListAfterWrites?: boolean, stallListAfterWrites?: boolean, open?: Record<string, string[]>, failLabels?: boolean, gone?: string[], recovered?: { subject: string, at: number }[] } = {}) => {
+const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[], throttleMinimal?: string[], throttleModify?: string[], throttleModifyOnce?: string[], newerAfterModify?: string[], throttleCounts?: boolean, throttleProfile?: boolean, throttleListAfterWrites?: boolean, stallListAfterWrites?: boolean, open?: Record<string, string[]>, failLabels?: boolean, gone?: string[], recovered?: { subject: string, at: number, forged?: boolean }[] } = {}) => {
   const modifies: { id: string, requestBody: { addLabelIds: string[], removeLabelIds: string[] } }[] = []
   const counts: string[] = []
   const created: string[] = []
@@ -27,7 +27,7 @@ const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[
   const thread = (s: Spec) => ({
     id: s.id,
     messages: [...(s.readMsg ? [{ id: `r-${s.id}`, labelIds: ['INBOX'], internalDate: '50', snippet: 'read', payload: { headers: [] } }] : []),...(s.earlierHuman ? [{ id: `h-${s.id}`, labelIds: ['UNREAD', 'INBOX'], internalDate: '500', snippet: 'earlier', payload: { headers: [{ name: 'From', value: 'Jane <jane@y.com>' }, { name: 'To', value: 'me@x.com' }, { name: 'Subject', value: 'earlier' }] } }] : []), {
-      id: `m-${s.id}`, labelIds: ['UNREAD', 'INBOX', ...(s.labels ?? [])], internalDate: s.at ?? '1000', snippet: 'snip',
+      id: `m-${s.id}`, labelIds: [...(s.read ? [] : ['UNREAD']), ...(s.outOfInbox ? [] : ['INBOX']), ...(s.labels ?? [])], internalDate: s.at ?? '1000', snippet: 'snip',
       payload: { headers: [
         { name: 'From', value: s.from ?? `Sender <${s.id}@x.com>` }, { name: 'To', value: s.to ?? (s.direct ? 'me@x.com' : 'list@x.com') }, { name: 'Subject', value: s.subject ?? `subj ${s.id}` },
         { name: 'Date', value: 'Sun, 15 Nov 2026 10:00:00 +0200' }, ...(s.listUnsubscribe ? [{ name: 'List-Unsubscribe', value: s.listUnsubscribe }] : []), ...(s.listUnsubscribePost ? [{ name: 'List-Unsubscribe-Post', value: s.listUnsubscribePost }] : []), ...(s.autoSubmitted ? [{ name: 'Auto-Submitted', value: s.autoSubmitted }] : []), ...(s.listId ? [{ name: 'List-Id', value: s.listId }] : []),
@@ -96,7 +96,8 @@ const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[
         list: async () => ({ data: { messages: (opts.recovered ?? []).map((_, i) => ({ id: `rec${i}` })) } }),
         get: async (p: { id: string }) => {
           const r = opts.recovered![Number(p.id.slice(3))]
-          return { data: { internalDate: String(r.at), payload: { headers: [{ name: 'From', value: 'Datadog Alerting <alert@dtdg.co>' }, { name: 'Subject', value: r.subject }] } } }
+          const auth = r.forged ? 'mx.google.com; dkim=fail header.i=@dtdg.co; dmarc=fail (p=REJECT) header.from=dtdg.co' : 'mx.google.com; dkim=pass header.i=@dtdg.co header.s=s1; dmarc=pass (p=REJECT sp=REJECT dis=NONE) header.from=dtdg.co'
+          return { data: { internalDate: String(r.at), payload: { headers: [{ name: 'Authentication-Results', value: auth }, { name: 'From', value: 'Datadog Alerting <alert@dtdg.co>' }, { name: 'Subject', value: r.subject }] } } }
         },
       },
       labels: {
@@ -956,15 +957,16 @@ test('a re-triaged thread swaps its old bucket label for the new one, logs it, a
 test('sweep: superseded alerts and quiet attention threads are archived with audit labels, logged, dropped from the open list, and undone', async () => {
   const day = 86_400_000
   const at = (d: number) => String(NOW.getTime() - d * day)
-  await saveState({ mode: 'live', artifactUrl: null, processed: { a1: 'm-a1', a2: 'm-a2', q: 'm-q', f: 'm-f', moved: 'm-moved' } })
+  await saveState({ mode: 'live', artifactUrl: null, processed: { a1: 'm-a1', a2: 'm-a2', q: 'm-q', f: 'm-f', moved: 'm-moved', unread: 'm-unread' } })
   const specs = [
     { id: 'a1', from: 'Datadog Alerting <alert@dtdg.co>', subject: '[P2] Triggered: Lock wait', at: at(5) },
     { id: 'a2', from: 'Datadog Alerting <alert@dtdg.co>', subject: '[P2] Re-Triggered: Lock wait', at: at(1) },
-    { id: 'q', subject: 'Renewal terms', at: at(45) },
-    { id: 'f', subject: 'Fresh ask', at: at(2) },
-    { id: 'moved', subject: 'Old but replied', at: at(40) },
+    { id: 'q', subject: 'Renewal terms', at: at(45), read: true },
+    { id: 'f', subject: 'Fresh ask', at: at(2), read: true },
+    { id: 'moved', subject: 'Old but replied', at: at(40), read: true },
+    { id: 'unread', subject: 'Old unread report', at: at(60) },
   ]
-  const { g, modifies } = fakeGmail(specs, { open: { 'Triage/Urgent': ['a1', 'a2'], 'Triage/Attention': ['q', 'f', 'moved'] }, newer: ['moved'] })
+  const { g, modifies } = fakeGmail(specs, { open: { 'Triage/Urgent': ['a1', 'a2'], 'Triage/Attention': ['q', 'f', 'moved', 'unread'] }, newer: ['moved'] })
   const res = await runTriage(mk(g, verdictsFor({})), { dryRun: false })
   assert.ok(res)
   assert.deepEqual(modifies, [
@@ -974,7 +976,7 @@ test('sweep: superseded alerts and quiet attention threads are archived with aud
   assert.deepEqual(res.input.swept?.resolved.map((r) => r.threadId), ['a1'])
   assert.deepEqual(res.input.swept?.stale.map((r) => r.threadId), ['q'])
   assert.deepEqual(res.input.open?.urgent.rows.map((r) => r.threadId), ['a2'])
-  assert.deepEqual(res.input.open?.attention.rows.map((r) => r.threadId), ['f', 'moved'])
+  assert.deepEqual(res.input.open?.attention.rows.map((r) => r.threadId), ['f', 'moved', 'unread'])
   assert.deepEqual((await readRun('2026-11-15')).map((e) => [e.kind, e.threadId, e.labelId]), [['archiveOld', 'a1', L('Resolved')], ['archiveOld', 'q', L('Stale')]])
   await runUndo(async () => g, '2026-11-15', async () => undefined)
   assert.deepEqual(modifies.slice(2).map((m) => [m.id, m.requestBody]), [['a1', { addLabelIds: ['INBOX'], removeLabelIds: [L('Resolved')] }], ['q', { addLabelIds: ['INBOX'], removeLabelIds: [L('Stale')] }]])
@@ -993,4 +995,33 @@ test('sweep: a later Recovered mail resolves the newest alert too; a dry run arc
   assert.equal(dry.modifies.length, 0)
   assert.deepEqual(d?.input.swept?.resolved.map((r) => r.threadId), ['a2'])
   assert.ok(readFileSync(d!.reportFile, 'utf8').includes('Would auto-archive'))
+})
+
+test('sweep: a forged Recovered mail resolves nothing; a sweep write failure is a failed row and exits 1', async () => {
+  const day = 86_400_000
+  const specs = [{ id: 'a2', from: 'Datadog Alerting <alert@dtdg.co>', subject: '[P2] Re-Triggered: Lock wait', at: String(NOW.getTime() - 2 * day) }]
+  await saveState({ mode: 'live', artifactUrl: null, processed: { a2: 'm-a2' } })
+  const forged = fakeGmail(specs, { open: { 'Triage/Urgent': ['a2'] }, recovered: [{ subject: '[P2] Recovered: Lock wait', at: NOW.getTime() - day, forged: true }] })
+  const res = await runTriage(mk(forged.g, verdictsFor({})), { dryRun: false })
+  assert.deepEqual(res?.input.swept?.resolved, [])
+  assert.equal(forged.modifies.length, 0)
+  const q = { id: 'q', subject: 'Quiet', at: String(NOW.getTime() - 45 * day), read: true }
+  await saveState({ mode: 'live', artifactUrl: null, processed: { q: 'm-q' } })
+  const broken = fakeGmail([q], { open: { 'Triage/Attention': ['q'] }, failModify: ['q'] })
+  const bad = await runTriage(mk(broken.g, verdictsFor({})), { dryRun: false })
+  assert.ok(bad)
+  assert.deepEqual(bad.input.failed.map((f) => [f.threadId, f.reason]), [['q', 'sweep archive failed']])
+  assert.equal(exitCodeOf(bad), 1)
+})
+
+test('sweep: a thread that left the Inbox after the listing, or already carries the audit label, is left alone', async () => {
+  const day = 86_400_000
+  const old = String(NOW.getTime() - 45 * day)
+  await saveState({ mode: 'live', artifactUrl: null, processed: { gone: 'm-gone', tagged: 'm-tagged' } })
+  const { g, modifies } = fakeGmail([{ id: 'gone', at: old, read: true, outOfInbox: true }, { id: 'tagged', at: old, read: true, labels: [L('Stale')] }], { open: { 'Triage/Attention': ['gone', 'tagged'], 'Triage/Stale': [] } })
+  const res = await runTriage(mk(g, verdictsFor({})), { dryRun: false })
+  assert.ok(res)
+  assert.equal(modifies.length, 0)
+  assert.deepEqual(res.input.swept, { resolved: [], stale: [] })
+  await assert.rejects(readRun('2026-11-15'), /no run log/)
 })
