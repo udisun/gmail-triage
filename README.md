@@ -11,7 +11,7 @@ Buckets: `urgent` (labeled, starred, stays in Inbox), `attention` (labeled, stay
 3. Store the client in the macOS Keychain: `node src/main.ts store-client < client_secret.json`
 4. Authorize: `node src/main.ts auth` (opens the browser, stores the refresh token in the Keychain).
 5. Check access: `node src/main.ts probe` (prints your unread count and three subjects).
-6. Install the schedule: `scripts/install-launchd.sh`. It generates the plist from `launchd/gmail-triage.plist.template` (label `local.gmail-triage`; set `GMAIL_TRIAGE_LABEL` to use another) with the absolute paths of `node` and `claude` (the job pins `CLAUDE_BIN` to the resolved `claude`), writes it to `~/Library/LaunchAgents/`, and reloads it. `--dest <dir>` changes the target, `--no-load` writes and lints only. Set `GMAIL_TRIAGE_HOME` before running it to carry that override into the job.
+6. Install the schedule: `scripts/install-launchd.sh`. It generates the plist from `launchd/gmail-triage.plist.template` (label `local.gmail-triage`; set `GMAIL_TRIAGE_LABEL` to use another) with the absolute paths of `node` and `claude` (the job pins `CLAUDE_BIN` to the resolved `claude`) and wraps the run in `caffeinate -s` so a sleeping Mac on AC power stays awake until it finishes, writes it to `~/Library/LaunchAgents/`, and reloads it. `--dest <dir>` changes the target, `--no-load` writes and lints only. Set `GMAIL_TRIAGE_HOME` before running it to carry that override into the job.
 7. Install the SessionStart hook: `node scripts/install-hook.ts` (edits the Claude Code settings files and keeps a `.bak-gmail-triage` backup).
 
 ## Daily behavior

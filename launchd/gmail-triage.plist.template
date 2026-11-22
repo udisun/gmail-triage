@@ -5,7 +5,10 @@
   <key>Label</key>
   <string>__LABEL__</string>
   <key>ProgramArguments</key>
+  <!-- caffeinate -s: a closed-lid Mac on AC otherwise wakes ~45s at a time and freezes the run mid-classify -->
   <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-s</string>
     <string>__NODE__</string>
     <string>__REPO__/src/main.ts</string>
     <string>run</string>
