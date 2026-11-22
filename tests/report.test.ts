@@ -4,7 +4,7 @@ import { parseListUnsubscribe, renderReport } from '../src/report.ts'
 import type { ReportInput } from '../src/report.ts'
 
 const base: ReportInput = {
-  date: '2026-11-15', mode: 'live', keptByFloor: 3, inbox: { total: 9, keptToday: 4, keptEarlier: 5, toTriage: 0, capped: false }, open: null, ifLive: null, repo: '/opt/gmail-triage', home: null,
+  date: '2026-11-15', mode: 'live', keptByFloor: 3, inbox: { total: 9, keptToday: 4, keptEarlier: 5, toTriage: 0, capped: false }, open: null, swept: null, ifLive: null, repo: '/opt/gmail-triage', home: null,
   rows: [
     { threadId: 't1', from: 'Boss <boss@x.com>', subject: 'Outage now', reason: 'prod is down', bucket: 'urgent' },
     { threadId: 't2', from: 'Pat <pat@x.com>', subject: 'Contract review', reason: 'asks for sign-off', bucket: 'attention' },
@@ -257,4 +257,12 @@ test('an error report lists open threads when it has them, and nothing extra whe
   assert.ok(withOpen.includes('class="err"') && withOpen.includes('Overdue invoice') && withOpen.includes('<h2>Attention</h2>'))
   const without = renderReport({ ...base, error: 'Run failed: x' })
   assert.ok(!without.includes('<h2>Urgent</h2>') && !without.includes('unavailable this run'))
+})
+
+test('the sweep section lists what was archived (live) or would be (dry), escaped, and is omitted when empty', () => {
+  const swept = { resolved: [{ threadId: 'r1', messageId: 'm', from: 'Datadog <alert@dtdg.co>', subject: '<b>[P2] Triggered</b>', lastAt: 0, why: 'monitor recovered' }], stale: [] }
+  const live = renderReport({ ...base, swept })
+  assert.ok(live.includes('<h2>Auto-archived</h2>') && live.includes('Resolved alerts (1)') && live.includes('&lt;b&gt;') && live.includes('Triage%2FResolved') && !live.includes('Stale attention'))
+  assert.ok(renderReport({ ...base, mode: 'dry', swept }).includes('<h2>Would auto-archive</h2>'))
+  assert.ok(!renderReport({ ...base, swept: { resolved: [], stale: [] } }).includes('auto-archive'))
 })

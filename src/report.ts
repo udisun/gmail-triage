@@ -1,5 +1,6 @@
 import type { Bucket } from './types.ts'
-import { BUCKETS, DUPLICATE_LABEL, LABEL_NAME } from './buckets.ts'
+import { BUCKETS, DUPLICATE_LABEL, LABEL_NAME, RESOLVED_LABEL, STALE_LABEL } from './buckets.ts'
+import type { SweepPlan, SweepRow } from './sweep.ts'
 
 export type ReportRow = { threadId: string, from: string, subject: string, reason: string, bucket: Bucket }
 // A thread left in the inbox; duplicate copies never get a bucket.
@@ -13,7 +14,7 @@ export type OpenRow = { threadId: string, from: string, subject: string, ageDays
 export type OpenInbox = { urgent: { rows: OpenRow[], rest: string[] }, attention: { rows: OpenRow[], rest: string[] } }
 export type ReportInput = {
   date: string, mode: 'dry' | 'live', keptByFloor: number,
-  inbox: InboxSplit | null, open: OpenInbox | null, ifLive: { archive: number, duplicates: number, keep: number } | null, repo: string, home: string | null, rows: ReportRow[], failed: FailedRow[], dupes: DupeRow[], dupArchived: number, dupProtected: number, unsub: UnsubRow[], error: string | null,
+  inbox: InboxSplit | null, open: OpenInbox | null, swept: SweepPlan | null, ifLive: { archive: number, duplicates: number, keep: number } | null, repo: string, home: string | null, rows: ReportRow[], failed: FailedRow[], dupes: DupeRow[], dupArchived: number, dupProtected: number, unsub: UnsubRow[], error: string | null,
 }
 
 const MAIL = 'https://mail.google.com/mail'
@@ -114,6 +115,19 @@ const item = (r: FailedRow): string =>
 
 const list = (rows: FailedRow[]): string => rows.length === 0 ? '<p class="empty">None</p>' : `<ul>${rows.map(item).join('')}</ul>`
 
+const sweptItem = (s: SweepRow): string =>
+  `<li><a href="${esc(threadHref(s.threadId))}">${esc(clip(s.subject))}</a><div class="from">${esc(clip(s.from))}</div><div class="why">${esc(s.why)}</div></li>`
+
+// Live: what the sweep archived; dry: what it would. Omitted when there is nothing.
+const sweptSection = (r: ReportInput): string => {
+  const s = r.swept
+  if (s === null || s.resolved.length + s.stale.length === 0) {
+    return ''
+  }
+  const group = (title: string, label: string, rows: SweepRow[]): string => rows.length === 0 ? '' : `<details><summary>${title} (${rows.length})</summary><p><a href="${esc(labelHref(label))}">Open label in Gmail</a></p><ul>${rows.map(sweptItem).join('')}</ul></details>`
+  return `<h2>${r.mode === 'dry' ? 'Would auto-archive' : 'Auto-archived'}</h2>${group('Resolved alerts', RESOLVED_LABEL, s.resolved)}${group('Stale attention', STALE_LABEL, s.stale)}`
+}
+
 const age = (d: number): string => d === 0 ? 'today' : `${d}d ago`
 
 const openItem = (o: OpenRow): string =>
@@ -208,7 +222,7 @@ export const renderReport = (r: ReportInput): string => {
     const unsub = r.unsub.length === 0 ? '<p class="empty">None</p>' : `<ul>${r.unsub.map(unsubItem).join('')}</ul>`
     const groups = BUCKETS.filter((b) => b !== 'urgent' && b !== 'attention').map((b) =>
       `<details><summary>${NAME(b)} (${rows(b).length})</summary><p><a href="${esc(labelHref(LABEL_NAME[b]))}">Open label in Gmail</a></p>${list(rows(b))}</details>`).join('')
-    body = `${head}${sub}${tiles}${open.urgent.html}${open.attention.html}${failedSection}${dupSection}<h2>Unsubscribe queue</h2>${unsub}<h2>Archived</h2>${groups}${undo}`
+    body = `${head}${sub}${tiles}${open.urgent.html}${open.attention.html}${sweptSection(r)}${failedSection}${dupSection}<h2>Unsubscribe queue</h2>${unsub}<h2>Archived</h2>${groups}${undo}`
   }
 
   return `<!doctype html>

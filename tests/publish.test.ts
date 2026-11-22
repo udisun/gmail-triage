@@ -90,7 +90,7 @@ test('a marker write failure notifies with the report path and rethrows', async 
 
 const row = (bucket: ReportInput['rows'][number]['bucket']) => ({ threadId: 't', from: 'f', subject: 's', reason: 'r', bucket })
 const input = (over: Partial<ReportInput> = {}): ReportInput =>
-  ({ date: '2026-11-15', mode: 'live', keptByFloor: 0, inbox: { total: 0, keptToday: 0, keptEarlier: 0, toTriage: 0, capped: false }, open: null, ifLive: null, repo: '/r', home: null, rows: [], failed: [], dupes: [], dupArchived: 0, dupProtected: 0, unsub: [], error: null, ...over })
+  ({ date: '2026-11-15', mode: 'live', keptByFloor: 0, inbox: { total: 0, keptToday: 0, keptEarlier: 0, toTriage: 0, capped: false }, open: null, swept: null, ifLive: null, repo: '/r', home: null, rows: [], failed: [], dupes: [], dupArchived: 0, dupProtected: 0, unsub: [], error: null, ...over })
 
 test('summaryOf reports archived, urgent and attention counts, and publishAndNotify keeps the session suffix', async () => {
   const rows = [row('urgent'), row('attention'), row('attention'), row('receipts'), row('nonwork'), row('unsubscribe')]
