@@ -22,7 +22,6 @@ export const undoRun = async (api: UndoApi, date: string, retry?: Retry): Promis
   const ops = await readRunOps(date)
   const entries = ops.map((o) => o.entry)
   const logged = new Set(entries.filter((e) => e.kind === undefined || e.kind === 'triage').map((e) => e.labelId).filter((id) => id !== ''))
-  const restorable = new Set(entries.flatMap((e) => (e.kind === undefined || e.kind === 'triage' ? e.removedLabelIds ?? [] : [])))
   const dupLogged = new Set(entries.filter((e) => e.kind === 'dedupe').map((e) => e.labelId))
   const oldLogged = new Set(entries.filter((e) => e.kind === 'archiveOld').map((e) => e.labelId))
   // A receipt is per operation; one written before operation ids existed matches only entries that have none.
@@ -73,7 +72,7 @@ export const undoRun = async (api: UndoApi, date: string, retry?: Retry): Promis
       continue
     }
     try {
-      await applyUndo(api, e.threadId, body, e.kind === 'dedupe' ? dupLogged : e.kind === 'archiveOld' ? oldLogged : logged, retry, e.kind === 'dedupe' ? true : e.kind === 'archiveOld' ? 'archiveOld' : false, restorable)
+      await applyUndo(api, e.threadId, body, e.kind === 'dedupe' ? dupLogged : e.kind === 'archiveOld' ? oldLogged : logged, retry, e.kind === 'dedupe' ? true : e.kind === 'archiveOld' ? 'archiveOld' : false, new Set(e.kind === 'dedupe' || e.kind === 'archiveOld' ? [] : e.removedLabelIds ?? []))
     } catch {
       failed.push(e.threadId)
       continue
