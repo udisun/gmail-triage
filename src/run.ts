@@ -299,8 +299,8 @@ export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<
     // a dry run writes nothing, so it retained nothing: the split counts the real inbox
     const keptToday = new Set(dry ? [] : [...retained.map((t) => t.threadId), ...protectedOlder.map((t) => t.threadId)])
     const touched = new Set(fetched.threads.map((t) => t.threadId))
-    const inbox = await countInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (id) => keptToday.has(id) ? 'today' : state.processed[id] !== undefined && !touched.has(id) ? 'earlier' : 'triage')
-    const open = await openInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, deps.now())
+    const [inbox, open] = await Promise.all([countInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (id) => keptToday.has(id) ? 'today' : state.processed[id] !== undefined && !touched.has(id) ? 'earlier' : 'triage'),
+      openInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, deps.now())])
     // the dry run's own decisions, never derived from the listing
     const ifLive = dry ? { archive: done.length - retained.length + dupArchived, duplicates: dupArchived, keep: retained.length + protectedOlder.length } : null
     return await finish({ date, mode, keptByFloor: done.filter((t) => keptIds.has(t.threadId)).length, inbox, open, ifLive, ...undoCtx(deps.repo), rows, failed: failedRows, dupes: dupRows, dupArchived, dupProtected: protectedOlder.length, unsub, error: null }, failed)

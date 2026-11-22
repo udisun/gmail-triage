@@ -221,18 +221,18 @@ test('header splits the inbox, hints a re-run only when threads still need triag
 
 const open = (over: Partial<NonNullable<ReportInput['open']>> = {}): ReportInput['open'] => ({
   urgent: { total: 2, rows: [{ threadId: 't1', from: 'Boss <boss@x.com>', subject: 'Outage now', ageDays: 0 }, { threadId: 'u2', from: 'Bank <b@bank.com>', subject: 'Overdue invoice', ageDays: 3 }] },
-  attention: { total: 3, rows: [{ threadId: 'u2', from: 'Bank <b@bank.com>', subject: 'Overdue invoice', ageDays: 3 }, { threadId: 'a2', from: 'Rep <r@cf.com>', subject: 'Renewal terms', ageDays: 2 }] },
+  attention: { total: 3, rows: [{ threadId: 't2', from: 'Pat <pat@x.com>', subject: 'Contract review', ageDays: 0 }, { threadId: 'a2', from: 'Rep <r@cf.com>', subject: 'Renewal terms', ageDays: 2 }] },
   ...over,
 })
 
-test('earlier open threads follow today\'s verdicts; today\'s and urgent ones are not repeated; the rest links to Gmail', () => {
+test('earlier open threads follow today\'s verdicts; today\'s are not repeated; the rest links to Gmail', () => {
   const html = renderReport({ ...base, open: open() })
   const urgent = html.slice(html.indexOf('<h2>Urgent</h2>'), html.indexOf('<h2>Attention</h2>'))
   const attention = html.slice(html.indexOf('<h2>Attention</h2>'), html.indexOf('<h2>Unsubscribe'))
   assert.equal(urgent.split('Outage now').length - 1, 1)
   assert.ok(urgent.includes('Earlier, still in inbox (1)') && urgent.includes('Overdue invoice') && urgent.includes('3d ago'))
-  assert.ok(!attention.includes('Overdue invoice'))
-  assert.ok(attention.includes('Contract review') && attention.includes('Renewal terms') && attention.includes('2d ago'))
+  assert.equal(attention.split('Contract review').length - 1, 1)
+  assert.ok(attention.includes('Renewal terms') && attention.includes('2d ago'))
   assert.ok(attention.includes('Earlier, still in inbox (2)') && attention.includes('1 more in Gmail') && attention.includes('#label/Triage%2FAttention'))
   assert.ok(html.includes('Urgent open</div><div class="tile-n">2<') && html.includes('Attention open</div><div class="tile-n">3<'))
 })
@@ -242,4 +242,10 @@ test('open rows are escaped and clipped; unavailable open data says so; nothing 
   assert.ok(hostile.includes('&lt;img') && !hostile.includes('<img src=x'))
   assert.ok(hostile.includes('None new today') && hostile.includes('1d ago'))
   assert.equal(renderReport(base).split('unavailable this run').length - 1, 2)
+})
+
+test('a dry run never hides a real labeled thread behind its hypothetical verdict', () => {
+  const attention = (html: string) => html.slice(html.indexOf('<h2>Attention</h2>'), html.indexOf('<h2>Unsubscribe'))
+  assert.equal(attention(renderReport({ ...base, open: open() })).split('Contract review').length - 1, 1)
+  assert.equal(attention(renderReport({ ...base, mode: 'dry', open: open() })).split('Contract review').length - 1, 2)
 })
