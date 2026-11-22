@@ -113,7 +113,7 @@ const verdictsFor = (map: Record<string, Bucket>) => async (batch: ThreadInput[]
 })
 
 const NOW = new Date(2026, 10, 15, 23, 59)
-const mk = (g: GmailLike, classify: Deps['classify'], pins: Deps['pins'] = { neverArchive: [], alwaysUrgent: [] }, extra: Partial<Deps> = {}): Deps => ({ gmail: async () => g, classify, pins, now: () => NOW, repo: '/opt/gmail-triage', ...extra })
+const mk = (g: GmailLike, classify: Deps['classify'], pins: Deps['pins'] = { neverArchive: [], alwaysUrgent: [] }, extra: Partial<Deps> = {}): Deps => ({ gmail: async () => g, classify, pins, now: () => NOW, repo: '/opt/gmail-triage', sleep: async () => undefined, ...extra })
 const L = (name: string) => `L-Triage/${name}`
 
 test('happy path: three threads, three modify calls with the right bodies', async () => {
@@ -204,9 +204,11 @@ test('a batch that fails once is retried and applied', async () => {
   await saveState({ mode: 'live', artifactUrl: null, processed: {} })
   const { g, modifies } = fakeGmail([{ id: 'a' }])
   let calls = 0
-  const res = await runTriage(mk(g, async (b) => (++calls === 1 ? Promise.reject(new Error('timeout')) : verdictsFor({ a: 'receipts' })(b))), { dryRun: false })
+  const slept: number[] = []
+  const res = await runTriage(mk(g, async (b) => (++calls === 1 ? Promise.reject(new Error('timeout')) : verdictsFor({ a: 'receipts' })(b)), undefined, { sleep: async (ms) => { slept.push(ms) } }), { dryRun: false })
   assert.ok(res)
   assert.equal(calls, 2)
+  assert.deepEqual(slept, [15_000])
   assert.deepEqual(res.failed, [])
   assert.equal(modifies.length, 1)
 })

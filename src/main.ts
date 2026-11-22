@@ -43,8 +43,13 @@ const commands: Record<string, (args: string[]) => Promise<void>> = {
   run: async (args) => {
     // launchd's log has no timestamps of its own
     console.log(`run start ${new Date().toISOString()}`)
-    process.exitCode = await runDaily({ gmail: gmailClient, classify: classifyBatch, loadPins, now: () => new Date(), repo: REPO }, { dryRun: args.includes('--dry-run') })
-    console.log(`run end ${new Date().toISOString()} exit ${process.exitCode}`)
+    let code: number | string = 'crashed'
+    try {
+      code = await runDaily({ gmail: gmailClient, classify: classifyBatch, loadPins, now: () => new Date(), repo: REPO }, { dryRun: args.includes('--dry-run') })
+      process.exitCode = code
+    } finally {
+      console.log(`run end ${new Date().toISOString()} exit ${code}`)
+    }
   },
   'mark-published': async (args) => {
     const url = args[0] ?? ''
