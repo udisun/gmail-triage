@@ -21,7 +21,7 @@ import { addCapture, writeUnsubCapture } from './unsubscribe.ts'
 import type { UnsubEntry } from './unsubscribe.ts'
 import type { Bucket, Pins, ThreadInput } from './types.ts'
 import { validateVerdicts } from './validate.ts'
-import { applySweep, listRecoveries, planSweep } from './sweep.ts'
+import { applySweep, planSweep } from './sweep.ts'
 import type { SweepPlan, SweepRow } from './sweep.ts'
 
 // The structural subset of gmail_v1.Gmail that a run uses; the real client satisfies it.
@@ -155,23 +155,20 @@ const openInbox = async (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: num
 }
 
 // Plans the sweep from the open list on the run's own budget (skipped once it is spent); a dry run or an empty plan writes nothing,
-// and a failed recovery lookup only drops the recovery rule.
 const sweepOpen = async (g: GmailLike, byName: Map<string, OpenList>, dry: boolean, date: string, deps: Deps, budget: RetryBudget): Promise<{ swept: SweepPlan, failed: SweepRow[] }> => {
   const none = { swept: { resolved: [], stale: [] }, failed: [] }
   if (budget.exhausted) {
     return none
   }
-  const recoveries = await withDeadline(deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (signal) => listRecoveries(g as unknown as gmail_v1.Gmail, budget, signal))
-  if (recoveries === null) {
-    console.error('sweep: recovery lookup failed, only superseded alerts and stale threads are swept')
-  }
-  const plan = planSweep(byName, recoveries ?? new Map(), deps.now().getTime(), deps.pins)
+  const plan = planSweep(byName, deps.now().getTime(), deps.pins)
   if (dry || plan.resolved.length + plan.stale.length === 0) {
     return { swept: plan, failed: [] }
   }
   try {
     const labels = await ensureLabels(g.users.labels, retryWith(budget))
-    const { done, failed } = await applySweep(g.users.threads, plan, labels, date, budget)
+    const me = (await withRateLimitRetry(() => g.users.getProfile({ userId: 'me' }), { budget })).data.emailAddress ?? ''
+    const directHumanUnread = (t: gmail_v1.Schema$Thread): boolean => toThreadInput(t, me, deps.pins.myAddresses, deps.pins.automatedDomains)?.humanDirectUnread ?? false
+    const { done, failed } = await applySweep(g.users.threads, plan, labels, date, budget, directHumanUnread)
     return { swept: done, failed }
   } catch {
     console.error('sweep: could not resolve its labels, nothing archived')
