@@ -8,9 +8,9 @@ export type DupeRow = { threadId: string, from: string, subject: string, older: 
 export type UnsubRow = { sender: string, count30d: number | null, link: { kind: 'https' | 'mailto', href: string } }
 // Every unread inbox thread after the run, in exactly one bucket (a dry run counts the real inbox); counts are floors when capped, null inbox means unavailable.
 export type InboxSplit = { total: number, keptToday: number, keptEarlier: number, toTriage: number, capped: boolean }
-// Inbox threads labeled urgent/attention by any run; total counts every one, rows hold the newest few hundred. null means unavailable.
+// Inbox threads labeled urgent/attention by any run; rows hold the newest few hundred, rest the unfetched ids. null means unavailable.
 export type OpenRow = { threadId: string, from: string, subject: string, ageDays: number }
-export type OpenInbox = { urgent: { total: number, rows: OpenRow[] }, attention: { total: number, rows: OpenRow[] } }
+export type OpenInbox = { urgent: { rows: OpenRow[], rest: string[] }, attention: { rows: OpenRow[], rest: string[] } }
 export type ReportInput = {
   date: string, mode: 'dry' | 'live', keptByFloor: number,
   inbox: InboxSplit | null, open: OpenInbox | null, ifLive: { archive: number, duplicates: number, keep: number } | null, repo: string, home: string | null, rows: ReportRow[], failed: FailedRow[], dupes: DupeRow[], dupArchived: number, dupProtected: number, unsub: UnsubRow[], error: string | null,
@@ -126,7 +126,7 @@ const openSections = (r: ReportInput): Record<'urgent' | 'attention', { html: st
   const section = (b: 'urgent' | 'attention'): { html: string, count: number } => {
     const o = r.open?.[b] ?? null
     const earlier = (o?.rows ?? []).filter((x) => !shown.has(x.threadId))
-    const more = o === null ? 0 : Math.max(0, o.total - o.rows.length)
+    const more = (o?.rest ?? []).filter((id) => !shown.has(id)).length
     const tail = o === null
       ? '<p class="why">Earlier threads still in inbox: unavailable this run</p>'
       : earlier.length === 0 && more === 0 ? '' : `<h3>Earlier, still in inbox (${earlier.length + more})</h3>${earlier.length === 0 ? '' : `<ul>${earlier.map(openItem).join('')}</ul>`}${more === 0 ? '' : `<p><a href="${esc(labelHref(LABEL_NAME[b]))}">${more} more in Gmail</a></p>`}`

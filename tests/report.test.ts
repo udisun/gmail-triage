@@ -220,8 +220,9 @@ test('header splits the inbox, hints a re-run only when threads still need triag
 })
 
 const open = (over: Partial<NonNullable<ReportInput['open']>> = {}): ReportInput['open'] => ({
-  urgent: { total: 2, rows: [{ threadId: 't1', from: 'Boss <boss@x.com>', subject: 'Outage now', ageDays: 0 }, { threadId: 'u2', from: 'Bank <b@bank.com>', subject: 'Overdue invoice', ageDays: 3 }] },
-  attention: { total: 3, rows: [{ threadId: 't2', from: 'Pat <pat@x.com>', subject: 'Contract review', ageDays: 0 }, { threadId: 'a2', from: 'Rep <r@cf.com>', subject: 'Renewal terms', ageDays: 2 }] },
+  urgent: { rest: [], rows: [{ threadId: 't1', from: 'Boss <boss@x.com>', subject: 'Outage now', ageDays: 0 }, { threadId: 'u2', from: 'Bank <b@bank.com>', subject: 'Overdue invoice', ageDays: 3 }] },
+  // t2 is today's verdict past the row cap: it must not count again as 'more'
+  attention: { rest: ['a3', 't2'], rows: [{ threadId: 'a2', from: 'Rep <r@cf.com>', subject: 'Renewal terms', ageDays: 2 }] },
   ...over,
 })
 
@@ -238,7 +239,7 @@ test('earlier open threads follow today\'s verdicts; today\'s are not repeated; 
 })
 
 test('open rows are escaped and clipped; unavailable open data says so; nothing new shows None new today', () => {
-  const hostile = renderReport({ ...base, rows: [], open: open({ urgent: { total: 1, rows: [{ threadId: 'x', from: 'f', subject: '<img src=x onerror=alert(1)>', ageDays: 1 }] } }) })
+  const hostile = renderReport({ ...base, rows: [], open: open({ urgent: { rest: [], rows: [{ threadId: 'x', from: 'f', subject: '<img src=x onerror=alert(1)>', ageDays: 1 }] } }) })
   assert.ok(hostile.includes('&lt;img') && !hostile.includes('<img src=x'))
   assert.ok(hostile.includes('None new today') && hostile.includes('1d ago'))
   assert.equal(renderReport(base).split('unavailable this run').length - 1, 2)
@@ -246,6 +247,7 @@ test('open rows are escaped and clipped; unavailable open data says so; nothing 
 
 test('a dry run never hides a real labeled thread behind its hypothetical verdict', () => {
   const attention = (html: string) => html.slice(html.indexOf('<h2>Attention</h2>'), html.indexOf('<h2>Unsubscribe'))
-  assert.equal(attention(renderReport({ ...base, open: open() })).split('Contract review').length - 1, 1)
-  assert.equal(attention(renderReport({ ...base, mode: 'dry', open: open() })).split('Contract review').length - 1, 2)
+  const labeled = open({ attention: { rest: [], rows: [{ threadId: 't2', from: 'Pat <pat@x.com>', subject: 'Contract review', ageDays: 0 }] } })
+  assert.equal(attention(renderReport({ ...base, open: labeled })).split('Contract review').length - 1, 1)
+  assert.equal(attention(renderReport({ ...base, mode: 'dry', open: labeled })).split('Contract review').length - 1, 2)
 })
