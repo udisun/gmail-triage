@@ -870,8 +870,8 @@ test('report lists urgent and attention threads kept by earlier runs and still i
   const res = await runTriage(mk(g, verdictsFor({ a: 'urgent' })), { dryRun: false })
   assert.ok(res)
   assert.deepEqual(res.input.open, {
-    urgent: { total: 1, rows: [{ threadId: 'old', from: 'Sender <old@x.com>', subject: 'subj old', ageDays: 3 }] },
-    attention: { total: 1, rows: [{ threadId: 'older', from: 'Sender <older@x.com>', subject: 'subj older', ageDays: 9 }] },
+    urgent: { rest: [], rows: [{ threadId: 'old', from: 'Sender <old@x.com>', subject: 'subj old', ageDays: 3 }] },
+    attention: { rest: [], rows: [{ threadId: 'older', from: 'Sender <older@x.com>', subject: 'subj older', ageDays: 9 }] },
   })
   const html = readFileSync(res.reportFile, 'utf8')
   assert.ok(html.includes('subj a') && html.includes('subj old') && html.includes('3d ago') && html.includes('9d ago'))
@@ -895,7 +895,7 @@ test('open lookup: a thread on both labels counts once, under urgent; a thread d
   const res = await runTriage(mk(g, verdictsFor({})), { dryRun: false })
   assert.ok(res?.input.open)
   assert.deepEqual(res.input.open.urgent.rows.map((r) => r.threadId), ['both', 'u'])
-  assert.equal(res.input.open.urgent.total, 3)
+  assert.deepEqual(res.input.open.urgent.rest, [])
   assert.deepEqual(res.input.open.attention.rows.map((r) => r.threadId), ['x'])
-  assert.equal(res.input.open.attention.total, 1)
+  assert.deepEqual(res.input.open.attention.rest, [])
 })

@@ -176,10 +176,11 @@ export const fetchUnreadThreads = async (
 }
 
 export type OpenRow = { threadId: string, from: string, subject: string, lastAt: number }
-export type OpenList = { total: number, rows: OpenRow[] }
+// rest: ids listed but past OPEN_ROWS, never fetched
+export type OpenList = { rows: OpenRow[], rest: string[] }
 const OPEN_ROWS = 200
 
-// Read-only: inbox threads carrying each label (read or not), each thread under the first name that has it; total counts every id, rows hold the newest OPEN_ROWS. A missing label is an empty list.
+// Read-only: inbox threads carrying each label (read or not), each thread under the first name that has it; rows hold the newest OPEN_ROWS, rest the unfetched ids. A missing label is an empty list.
 export const listOpenByLabel = async (g: gmail_v1.Gmail, names: string[], budget: RetryBudget, signal?: AbortSignal): Promise<Map<string, OpenList>> => {
   const { data } = await withRateLimitRetry(() => g.users.labels.list({ userId: 'me' }, { signal }), { budget })
   const out = new Map<string, OpenList>()
@@ -218,7 +219,7 @@ export const listOpenByLabel = async (g: gmail_v1.Gmail, names: string[], budget
         }
       }
     }
-    out.set(name, { total: ids.length, rows })
+    out.set(name, { rows, rest: ids.slice(OPEN_ROWS) })
   }
   return out
 }

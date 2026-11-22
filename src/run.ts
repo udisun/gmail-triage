@@ -141,7 +141,7 @@ const countInbox = (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, 
 const openInbox = (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, now: Date): Promise<OpenInbox | null> =>
   withDeadline(deadlineMs, async (signal) => {
     const byName = await listOpenByLabel(g, [LABEL_NAME.urgent, LABEL_NAME.attention], budget, signal)
-    const aged = (l: OpenList | undefined) => ({ total: l?.total ?? 0, rows: (l?.rows ?? []).map(({ lastAt, ...r }) => ({ ...r, ageDays: Math.max(0, Math.floor((now.getTime() - lastAt) / 86_400_000)) })) })
+    const aged = (l: OpenList | undefined) => ({ rest: l?.rest ?? [], rows: (l?.rows ?? []).map(({ lastAt, ...r }) => ({ ...r, ageDays: Math.max(0, Math.floor((now.getTime() - lastAt) / 86_400_000)) })) })
     return { urgent: aged(byName.get(LABEL_NAME.urgent)), attention: aged(byName.get(LABEL_NAME.attention)) }
   })
 
