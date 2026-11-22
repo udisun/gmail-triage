@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { gmail_v1 } from 'googleapis'
-import { actionFor } from './buckets.ts'
+import { actionFor, LABEL_NAME } from './buckets.ts'
 import { groupDuplicates } from './dedupe.ts'
-import { AuthError, fetchUnreadThreads, listUnreadIds, HEADERS, senderCount30d, stripControl, toThreadInput } from './gmail.ts'
+import { AuthError, fetchUnreadThreads, listOpenByLabel, listUnreadIds, HEADERS, senderCount30d, stripControl, toThreadInput } from './gmail.ts'
+import type { OpenList } from './gmail.ts'
 import { applyDedupe, applyTriage, dedupeBody, ensureLabels, triageBody } from './gmailWrite.ts'
 import type { LabelsApi, Retry, ThreadsApi } from './gmailWrite.ts'
 import { homeDir } from './paths.ts'
@@ -12,7 +13,7 @@ import { applyDirectMailFloor, applyPins, fromMailbox } from './pins.ts'
 import { createRetryBudget, QuotaExhaustedError, realSleep, retryNetwork, withRateLimitRetry } from './retry.ts'
 import type { RetryBudget, Sleep } from './retry.ts'
 import { renderReport, reportKind } from './report.ts'
-import type { DupeRow, FailedRow, InboxSplit, ReportInput, ReportRow, UnsubRow } from './report.ts'
+import type { DupeRow, FailedRow, InboxSplit, OpenInbox, ReportInput, ReportRow, UnsubRow } from './report.ts'
 import { acquireLock, appendRunEntry, loadState, readRun, saveState } from './state.ts'
 import type { RunEntry } from './state.ts'
 import { undoRun } from './undo.ts'
@@ -77,7 +78,7 @@ const retryTriage = (g: GmailLike, t: ThreadInput, budget: RetryBudget): Retry =
 const undoCtx = (repo: string): { repo: string, home: string | null } => ({ repo, home: process.env.GMAIL_TRIAGE_HOME ?? null })
 
 export const errorInput = (date: string, mode: 'dry' | 'live', error: string, repo: string): ReportInput =>
-  ({ date, mode, keptByFloor: 0, inbox: null, ifLive: null, ...undoCtx(repo), rows: [], failed: [], dupes: [], dupArchived: 0, dupProtected: 0, unsub: [], error })
+  ({ date, mode, keptByFloor: 0, inbox: null, open: null, ifLive: null, ...undoCtx(repo), rows: [], failed: [], dupes: [], dupArchived: 0, dupProtected: 0, unsub: [], error })
 
 // Newest message still carrying UNREAD: our own sent replies must not block triage.
 const newestUnreadId = async (g: GmailLike, id: string, budget: RetryBudget): Promise<string | null> => {
@@ -109,13 +110,24 @@ const buildUnsub = async (g: GmailLike, rows: ReportRow[], byId: Map<string, Thr
   return { unsub, capture: [...found.values()] }
 }
 
-// Lists every unread inbox id once and files it into exactly one bucket; any failure or the deadline gives null, never a guess.
-const countInbox = async (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, bucketOf: (id: string) => 'today' | 'earlier' | 'triage'): Promise<InboxSplit | null> => {
+// Any failure or the deadline gives null, never a guess; the signal cancels in-flight calls.
+const withDeadline = async <T>(deadlineMs: number, fn: (signal: AbortSignal) => Promise<T>): Promise<T | null> => {
   const ac = new AbortController()
   const timer = setTimeout(() => ac.abort(), deadlineMs)
-  const deadline = new Promise<never>((_, reject) => ac.signal.addEventListener('abort', () => reject(new Error('count deadline')), { once: true }))
+  const deadline = new Promise<never>((_, reject) => ac.signal.addEventListener('abort', () => reject(new Error('deadline')), { once: true }))
   try {
-    const { ids, capped } = await Promise.race([listUnreadIds(g, budget, ac.signal), deadline])
+    return await Promise.race([fn(ac.signal), deadline])
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+// Lists every unread inbox id once and files it into exactly one bucket.
+const countInbox = (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, bucketOf: (id: string) => 'today' | 'earlier' | 'triage'): Promise<InboxSplit | null> =>
+  withDeadline(deadlineMs, async (signal) => {
+    const { ids, capped } = await listUnreadIds(g, budget, signal)
     const split: InboxSplit = { total: 0, keptToday: 0, keptEarlier: 0, toTriage: 0, capped }
     for (const id of ids) {
       const b = bucketOf(id)
@@ -123,12 +135,15 @@ const countInbox = async (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: nu
       split[b === 'today' ? 'keptToday' : b === 'earlier' ? 'keptEarlier' : 'toTriage']++
     }
     return split
-  } catch {
-    return null
-  } finally {
-    clearTimeout(timer)
-  }
-}
+  })
+
+// Urgent and attention threads still in the inbox from any run, aged against now.
+const openInbox = (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, now: Date): Promise<OpenInbox | null> =>
+  withDeadline(deadlineMs, async (signal) => {
+    const byName = await listOpenByLabel(g, [LABEL_NAME.urgent, LABEL_NAME.attention], budget, signal)
+    const aged = (l: OpenList | undefined) => ({ total: l?.total ?? 0, rows: (l?.rows ?? []).map(({ lastAt, ...r }) => ({ ...r, ageDays: Math.max(0, Math.floor((now.getTime() - lastAt) / 86_400_000)) })) })
+    return { urgent: aged(byName.get(LABEL_NAME.urgent)), attention: aged(byName.get(LABEL_NAME.attention)) }
+  })
 
 export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<RunResult | null> => {
   const release = await acquireLock()
@@ -285,9 +300,10 @@ export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<
     const keptToday = new Set(dry ? [] : [...retained.map((t) => t.threadId), ...protectedOlder.map((t) => t.threadId)])
     const touched = new Set(fetched.threads.map((t) => t.threadId))
     const inbox = await countInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (id) => keptToday.has(id) ? 'today' : state.processed[id] !== undefined && !touched.has(id) ? 'earlier' : 'triage')
+    const open = await openInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, deps.now())
     // the dry run's own decisions, never derived from the listing
     const ifLive = dry ? { archive: done.length - retained.length + dupArchived, duplicates: dupArchived, keep: retained.length + protectedOlder.length } : null
-    return await finish({ date, mode, keptByFloor: done.filter((t) => keptIds.has(t.threadId)).length, inbox, ifLive, ...undoCtx(deps.repo), rows, failed: failedRows, dupes: dupRows, dupArchived, dupProtected: protectedOlder.length, unsub, error: null }, failed)
+    return await finish({ date, mode, keptByFloor: done.filter((t) => keptIds.has(t.threadId)).length, inbox, open, ifLive, ...undoCtx(deps.repo), rows, failed: failedRows, dupes: dupRows, dupArchived, dupProtected: protectedOlder.length, unsub, error: null }, failed)
   } finally {
     await release()
   }

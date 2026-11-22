@@ -4,7 +4,7 @@ import { parseListUnsubscribe, renderReport } from '../src/report.ts'
 import type { ReportInput } from '../src/report.ts'
 
 const base: ReportInput = {
-  date: '2026-11-15', mode: 'live', keptByFloor: 3, inbox: { total: 9, keptToday: 4, keptEarlier: 5, toTriage: 0, capped: false }, ifLive: null, repo: '/opt/gmail-triage', home: null,
+  date: '2026-11-15', mode: 'live', keptByFloor: 3, inbox: { total: 9, keptToday: 4, keptEarlier: 5, toTriage: 0, capped: false }, open: null, ifLive: null, repo: '/opt/gmail-triage', home: null,
   rows: [
     { threadId: 't1', from: 'Boss <boss@x.com>', subject: 'Outage now', reason: 'prod is down', bucket: 'urgent' },
     { threadId: 't2', from: 'Pat <pat@x.com>', subject: 'Contract review', reason: 'asks for sign-off', bucket: 'attention' },
@@ -217,4 +217,29 @@ test('header splits the inbox, hints a re-run only when threads still need triag
   assert.match(renderReport({ ...base, mode: 'dry', ifLive: { archive: 300, duplicates: 4, keep: 2 } }), /If live: would archive 300 \(incl\. 4 older duplicates\), keep 2/)
   assert.doesNotMatch(renderReport(base), /If live/)
   assert.match(renderReport(base), /Kept earlier = kept by earlier runs \(new replies there are re-checked next run\)/)
+})
+
+const open = (over: Partial<NonNullable<ReportInput['open']>> = {}): ReportInput['open'] => ({
+  urgent: { total: 2, rows: [{ threadId: 't1', from: 'Boss <boss@x.com>', subject: 'Outage now', ageDays: 0 }, { threadId: 'u2', from: 'Bank <b@bank.com>', subject: 'Overdue invoice', ageDays: 3 }] },
+  attention: { total: 3, rows: [{ threadId: 'u2', from: 'Bank <b@bank.com>', subject: 'Overdue invoice', ageDays: 3 }, { threadId: 'a2', from: 'Rep <r@cf.com>', subject: 'Renewal terms', ageDays: 2 }] },
+  ...over,
+})
+
+test('earlier open threads follow today\'s verdicts; today\'s and urgent ones are not repeated; the rest links to Gmail', () => {
+  const html = renderReport({ ...base, open: open() })
+  const urgent = html.slice(html.indexOf('<h2>Urgent</h2>'), html.indexOf('<h2>Attention</h2>'))
+  const attention = html.slice(html.indexOf('<h2>Attention</h2>'), html.indexOf('<h2>Unsubscribe'))
+  assert.equal(urgent.split('Outage now').length - 1, 1)
+  assert.ok(urgent.includes('Earlier, still in inbox (1)') && urgent.includes('Overdue invoice') && urgent.includes('3d ago'))
+  assert.ok(!attention.includes('Overdue invoice'))
+  assert.ok(attention.includes('Contract review') && attention.includes('Renewal terms') && attention.includes('2d ago'))
+  assert.ok(attention.includes('Earlier, still in inbox (2)') && attention.includes('1 more in Gmail') && attention.includes('#label/Triage%2FAttention'))
+  assert.ok(html.includes('Urgent open</div><div class="tile-n">2<') && html.includes('Attention open</div><div class="tile-n">3<'))
+})
+
+test('open rows are escaped and clipped; unavailable open data says so; nothing new shows None new today', () => {
+  const hostile = renderReport({ ...base, rows: [], open: open({ urgent: { total: 1, rows: [{ threadId: 'x', from: 'f', subject: '<img src=x onerror=alert(1)>', ageDays: 1 }] } }) })
+  assert.ok(hostile.includes('&lt;img') && !hostile.includes('<img src=x'))
+  assert.ok(hostile.includes('None new today') && hostile.includes('1d ago'))
+  assert.equal(renderReport(base).split('unavailable this run').length - 1, 2)
 })

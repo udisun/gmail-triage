@@ -18,7 +18,7 @@ type Spec = { id: string, from?: string, to?: string, listUnsubscribe?: string, 
 const gaxios = (status: number, reason: string): Error =>
   Object.assign(new Error('Quota exceeded SECRET'), { response: { status, data: { error: { errors: [{ reason }] } } } })
 
-const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[], throttleMinimal?: string[], throttleModify?: string[], throttleModifyOnce?: string[], newerAfterModify?: string[], throttleCounts?: boolean, throttleProfile?: boolean, throttleListAfterWrites?: boolean, stallListAfterWrites?: boolean } = {}) => {
+const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[], throttleMinimal?: string[], throttleModify?: string[], throttleModifyOnce?: string[], newerAfterModify?: string[], throttleCounts?: boolean, throttleProfile?: boolean, throttleListAfterWrites?: boolean, stallListAfterWrites?: boolean, open?: Record<string, string[]>, failLabels?: boolean } = {}) => {
   const modifies: { id: string, requestBody: { addLabelIds: string[], removeLabelIds: string[] } }[] = []
   const counts: string[] = []
   const created: string[] = []
@@ -43,7 +43,11 @@ const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[
         return { data: { emailAddress: 'me@x.com' } }
       },
       threads: {
-        list: async (p: { q?: string }, o?: { signal?: AbortSignal }) => {
+        list: async (p: { q?: string, labelIds?: string[] }, o?: { signal?: AbortSignal }) => {
+          if (p.labelIds) {
+            const name = p.labelIds.find((l) => l !== 'INBOX')!.replace(/^L-/, '')
+            return { data: { threads: (opts.open?.[name] ?? []).map((id) => ({ id })) } }
+          }
           if (p.q?.startsWith('from:')) {
             counts.push(p.q)
             if (opts.throttleCounts) {
@@ -85,7 +89,12 @@ const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[
         },
       },
       labels: {
-        list: async () => ({ data: { labels: [] } }),
+        list: async () => {
+          if (opts.failLabels) {
+            throw new Error('labels down')
+          }
+          return { data: { labels: Object.keys(opts.open ?? {}).map((name) => ({ id: `L-${name}`, name })) } }
+        },
         create: async (p: { requestBody: { name: string } }) => {
           created.push(p.requestBody.name)
           return { data: { id: `L-${p.requestBody.name}` } }
@@ -849,4 +858,30 @@ test('a failed dedupe write is reported as failed and the run goes on', async ()
   assert.deepEqual(modifies.map((m) => m.id), ['n', 'a'])
   assert.deepEqual(res.input.failed.map((r) => [r.threadId, r.reason]), [['c', 'gmail write failed']])
   assert.equal(res.input.dupArchived, 1)
+})
+
+test('report lists urgent and attention threads kept by earlier runs and still in the inbox, aged from their last mail', async () => {
+  const day = 86_400_000
+  await saveState({ mode: 'live', artifactUrl: null, processed: { old: 'm-old', older: 'm-older' } })
+  const { g } = fakeGmail([{ id: 'a' }, { id: 'old', at: String(NOW.getTime() - 3 * day) }, { id: 'older', at: String(NOW.getTime() - 9 * day) }], { open: { 'Triage/Urgent': ['old'], 'Triage/Attention': ['older'] } })
+  const res = await runTriage(mk(g, verdictsFor({ a: 'urgent' })), { dryRun: false })
+  assert.ok(res)
+  assert.deepEqual(res.input.open, {
+    urgent: { total: 1, rows: [{ threadId: 'old', from: 'Sender <old@x.com>', subject: 'subj old', ageDays: 3 }] },
+    attention: { total: 1, rows: [{ threadId: 'older', from: 'Sender <older@x.com>', subject: 'subj older', ageDays: 9 }] },
+  })
+  const html = readFileSync(res.reportFile, 'utf8')
+  assert.ok(html.includes('subj a') && html.includes('subj old') && html.includes('3d ago') && html.includes('9d ago'))
+})
+
+test('a failed open-thread lookup leaves open null and still writes the report', async () => {
+  await saveState({ mode: 'live', artifactUrl: null, processed: {} })
+  const { g } = fakeGmail([{ id: 'a' }], { failLabels: true })
+  // dry run: no ensureLabels, so only the open-thread lookup meets the labels outage
+  const res = await runTriage(mk(g, verdictsFor({ a: 'urgent' })), { dryRun: true })
+  assert.ok(res)
+  assert.equal(res.input.error, null)
+  assert.equal(res.input.rows.length, 1)
+  assert.equal(res.input.open, null)
+  assert.ok(readFileSync(res.reportFile, 'utf8').includes('unavailable this run'))
 })

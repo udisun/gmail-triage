@@ -8,9 +8,12 @@ export type DupeRow = { threadId: string, from: string, subject: string, older: 
 export type UnsubRow = { sender: string, count30d: number | null, link: { kind: 'https' | 'mailto', href: string } }
 // Every unread inbox thread after the run, in exactly one bucket (a dry run counts the real inbox); counts are floors when capped, null inbox means unavailable.
 export type InboxSplit = { total: number, keptToday: number, keptEarlier: number, toTriage: number, capped: boolean }
+// Inbox threads labeled urgent/attention by any run; total counts every one, rows hold the newest few hundred. null means unavailable.
+export type OpenRow = { threadId: string, from: string, subject: string, ageDays: number }
+export type OpenInbox = { urgent: { total: number, rows: OpenRow[] }, attention: { total: number, rows: OpenRow[] } }
 export type ReportInput = {
   date: string, mode: 'dry' | 'live', keptByFloor: number,
-  inbox: InboxSplit | null, ifLive: { archive: number, duplicates: number, keep: number } | null, repo: string, home: string | null, rows: ReportRow[], failed: FailedRow[], dupes: DupeRow[], dupArchived: number, dupProtected: number, unsub: UnsubRow[], error: string | null,
+  inbox: InboxSplit | null, open: OpenInbox | null, ifLive: { archive: number, duplicates: number, keep: number } | null, repo: string, home: string | null, rows: ReportRow[], failed: FailedRow[], dupes: DupeRow[], dupArchived: number, dupProtected: number, unsub: UnsubRow[], error: string | null,
 }
 
 const MAIL = 'https://mail.google.com/mail'
@@ -75,6 +78,7 @@ body{margin:0;background:var(--surface-void);color:var(--ink);font:15px/1.5 "Sof
 main{max-width:860px;margin:0 auto;padding:24px 16px 48px}
 a{color:var(--indigo-text)}a:hover{color:var(--ink-bright)}
 h1{font-size:22px;color:var(--ink-bright);margin:0 0 4px}
+h3{font-size:14px;color:var(--ink-soft);margin:16px 0 8px}
 h2{font-size:16px;color:var(--ink-bright);margin:28px 0 8px;border-bottom:1px solid var(--surface-line);padding-bottom:6px}
 .sub{color:var(--ink-muted);margin:0 0 16px;overflow-wrap:anywhere}
 .dry{display:inline-block;background:var(--warning);color:var(--ink-bright);padding:1px 8px;border-radius:4px;font-weight:700;margin-right:8px}
@@ -109,6 +113,30 @@ const item = (r: FailedRow): string =>
   `<li><a href="${esc(threadHref(r.threadId))}">${esc(clip(r.subject))}</a><div class="from">${esc(clip(r.from))}</div><div class="why">${esc(r.reason)}</div></li>`
 
 const list = (rows: FailedRow[]): string => rows.length === 0 ? '<p class="empty">None</p>' : `<ul>${rows.map(item).join('')}</ul>`
+
+const age = (d: number): string => d === 0 ? 'today' : `${d}d ago`
+
+const openItem = (o: OpenRow): string =>
+  `<li><a href="${esc(threadHref(o.threadId))}">${esc(clip(o.subject))}</a><div class="from">${esc(clip(o.from))}</div><div class="why">last mail ${age(o.ageDays)}</div></li>`
+
+// Today's verdicts first, then every earlier thread still in the inbox under that label; a thread on both labels shows once, under urgent.
+const openSections = (r: ReportInput): Record<'urgent' | 'attention', { html: string, count: number }> => {
+  const today = (b: Bucket): ReportRow[] => r.rows.filter((x) => x.bucket === b)
+  const shown = new Set(r.rows.filter((x) => x.bucket === 'urgent' || x.bucket === 'attention').map((x) => x.threadId))
+  const section = (b: 'urgent' | 'attention'): { html: string, count: number } => {
+    const o = r.open?.[b] ?? null
+    const earlier = (o?.rows ?? []).filter((x) => !shown.has(x.threadId))
+    earlier.forEach((x) => shown.add(x.threadId))
+    const more = o === null ? 0 : Math.max(0, o.total - o.rows.length)
+    const tail = o === null
+      ? '<p class="why">Earlier threads still in inbox: unavailable this run</p>'
+      : earlier.length === 0 && more === 0 ? '' : `<h3>Earlier, still in inbox (${earlier.length + more})</h3>${earlier.length === 0 ? '' : `<ul>${earlier.map(openItem).join('')}</ul>`}${more === 0 ? '' : `<p><a href="${esc(labelHref(LABEL_NAME[b]))}">${more} more in Gmail</a></p>`}`
+    const head = today(b).length === 0 && tail !== '' ? '<p class="empty">None new today</p>' : list(today(b))
+    return { html: `<h2>${NAME(b)}</h2>${head}${tail}`, count: today(b).length + earlier.length + more }
+  }
+  const urgent = section('urgent')
+  return { urgent, attention: section('attention') }
+}
 
 // Renderer-side check so a bad UnsubRow can never reach an href.
 const safeUnsubHref = (l: UnsubRow['link']): string | null => {
@@ -171,14 +199,15 @@ export const renderReport = (r: ReportInput): string => {
     body = `${head}<div class="err">${esc(r.error)}</div>${undo}`
   } else {
     const sub = `<p class="sub">${r.keptByFloor} kept in inbox by direct-mail rule, ${r.mode === 'dry' ? `would archive ${r.dupArchived} older duplicates` : `${r.dupArchived} older duplicates archived`}</p><p class="sub">${inboxText(r)}</p>${r.ifLive === null ? '' : `<p class="sub">If live: would archive ${r.ifLive.archive} (incl. ${r.ifLive.duplicates} older duplicates), keep ${r.ifLive.keep}</p>`}<p class="why">Kept earlier = kept by earlier runs (new replies there are re-checked next run).</p>`
-    const tiles = `<div class="tiles">${tile('Archived', archived.length)}${tile('Unsubscribe queue', r.unsub.length)}${tile('Urgent', rows('urgent').length)}${tile('Attention', rows('attention').length)}</div>`
+    const open = openSections(r)
+    const tiles = `<div class="tiles">${tile('Archived', archived.length)}${tile('Unsubscribe queue', r.unsub.length)}${tile('Urgent open', open.urgent.count)}${tile('Attention open', open.attention.count)}</div>`
     const failedSection = r.failed.length === 0 ? '' : `<h2>Failed — still in inbox</h2>${list(r.failed)}`
     const kept = r.dupProtected === 0 ? '' : `<p class="why">${r.dupProtected} older ${r.dupProtected === 1 ? 'copy' : 'copies'} left in inbox (direct mail)</p>`
     const dupSection = r.dupes.length === 0 && r.dupProtected === 0 ? '' : `<h2>Duplicates collapsed</h2><p><a href="${esc(labelHref(DUPLICATE_LABEL))}">Open ${esc(DUPLICATE_LABEL)} in Gmail</a></p>${r.dupes.length === 0 ? '' : `<ul>${r.dupes.map(dupeItem).join('')}</ul>`}${kept}`
     const unsub = r.unsub.length === 0 ? '<p class="empty">None</p>' : `<ul>${r.unsub.map(unsubItem).join('')}</ul>`
     const groups = BUCKETS.filter((b) => b !== 'urgent' && b !== 'attention').map((b) =>
       `<details><summary>${NAME(b)} (${rows(b).length})</summary><p><a href="${esc(labelHref(LABEL_NAME[b]))}">Open label in Gmail</a></p>${list(rows(b))}</details>`).join('')
-    body = `${head}${sub}${tiles}<h2>Urgent</h2>${list(rows('urgent'))}<h2>Attention</h2>${list(rows('attention'))}${failedSection}${dupSection}<h2>Unsubscribe queue</h2>${unsub}<h2>Archived</h2>${groups}${undo}`
+    body = `${head}${sub}${tiles}${open.urgent.html}${open.attention.html}${failedSection}${dupSection}<h2>Unsubscribe queue</h2>${unsub}<h2>Archived</h2>${groups}${undo}`
   }
 
   return `<!doctype html>
