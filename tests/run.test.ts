@@ -175,27 +175,54 @@ test('45 threads are classified in 3 batches of at most 20', async () => {
   assert.deepEqual(sizes, [20, 20, 5])
 })
 
-test('classify throwing on batch 2 of 2 makes zero writes and renders an error report without email content', async () => {
+test('a batch that fails twice stays in the inbox as failed rows; the other batches still apply, and no email content leaks', async () => {
   await saveState({ mode: 'live', artifactUrl: null, processed: {} })
   const specs = Array.from({ length: 60 }, (_, i) => ({ id: `t${i}` }))
-  const { g, modifies, created } = fakeGmail(specs)
+  const { g, modifies } = fakeGmail(specs)
   let calls = 0
   const classify = async (b: ThreadInput[]): Promise<unknown> => {
     calls++
-    if (calls === 2) {
+    if (b.some((t) => t.threadId === 't20')) {
       throw new Error('SECRET-EMAIL-BODY')
     }
     return verdictsFor({})(b)
   }
   const res = await runTriage(mk(g, classify), { dryRun: false })
   assert.ok(res)
+  assert.equal(calls, 4)
+  assert.equal(res.input.error, null)
+  assert.equal(modifies.length, 40)
+  assert.ok(modifies.every((m) => !/^t(2\d|3\d)$/.test(m.id)))
+  assert.equal(res.failed.length, 20)
+  assert.ok(res.input.failed.every((f) => f.reason === 'classify failed'))
+  assert.equal(Object.keys((await loadState()).processed).length, 40)
+  assert.doesNotMatch(readFileSync(res.reportFile, 'utf8'), /SECRET/)
+  assert.equal(exitCodeOf(res), 1)
+})
+
+test('a batch that fails once is retried and applied', async () => {
+  await saveState({ mode: 'live', artifactUrl: null, processed: {} })
+  const { g, modifies } = fakeGmail([{ id: 'a' }])
+  let calls = 0
+  const res = await runTriage(mk(g, async (b) => (++calls === 1 ? Promise.reject(new Error('timeout')) : verdictsFor({ a: 'receipts' })(b))), { dryRun: false })
+  assert.ok(res)
   assert.equal(calls, 2)
+  assert.deepEqual(res.failed, [])
+  assert.equal(modifies.length, 1)
+})
+
+test('when every batch fails: zero writes, an error report, and the open list still rendered', async () => {
+  await saveState({ mode: 'live', artifactUrl: null, processed: { old: 'm-old' } })
+  const { g, modifies, created } = fakeGmail([{ id: 'a' }, { id: 'old' }], { open: { 'Triage/Urgent': ['old'] } })
+  const res = await runTriage(mk(g, async () => { throw new Error('SECRET-EMAIL-BODY') }), { dryRun: false })
+  assert.ok(res)
   assert.equal(modifies.length, 0)
   assert.equal(created.length, 0)
   assert.ok(res.input.error)
-  assert.doesNotMatch(res.input.error, /SECRET/)
-  assert.deepEqual((await loadState()).processed, {})
-  assert.ok(existsSync(res.reportFile))
+  assert.deepEqual(res.input.open?.urgent.rows.map((r) => r.threadId), ['old'])
+  const html = readFileSync(res.reportFile, 'utf8')
+  assert.ok(html.includes('subj old') && !/SECRET/.test(html))
+  assert.deepEqual((await loadState()).processed, { old: 'm-old' })
 })
 
 test('a classify failure logs the sanitized first line of the error and keeps it out of the report', async (t) => {
@@ -203,7 +230,7 @@ test('a classify failure logs the sanitized first line of the error and keeps it
   const { g } = fakeGmail([{ id: 'a' }])
   const res = await runTriage(mk(g, async () => { throw new Error('claude exited with code 1\u001b[31m: first\nSECOND-LINE') }), { dryRun: true })
   assert.ok(res)
-  assert.deepEqual(log.mock.calls.map((c) => c.arguments), [['classify failed: claude exited with code 1[31m: first']])
+  assert.deepEqual(log.mock.calls.map((c) => c.arguments), [1, 2].map((n) => [`classify failed (batch 1, attempt ${n}): claude exited with code 1[31m: first`]))
   assert.doesNotMatch(readFileSync(res.reportFile, 'utf8'), /first|SECOND/)
 })
 

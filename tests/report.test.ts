@@ -251,3 +251,10 @@ test('a dry run never hides a real labeled thread behind its hypothetical verdic
   assert.equal(attention(renderReport({ ...base, open: labeled })).split('Contract review').length - 1, 1)
   assert.equal(attention(renderReport({ ...base, mode: 'dry', open: labeled })).split('Contract review').length - 1, 2)
 })
+
+test('an error report lists open threads when it has them, and nothing extra when it does not', () => {
+  const withOpen = renderReport({ ...base, rows: [], error: 'Classification failed', open: open() })
+  assert.ok(withOpen.includes('class="err"') && withOpen.includes('Overdue invoice') && withOpen.includes('<h2>Attention</h2>'))
+  const without = renderReport({ ...base, error: 'Run failed: x' })
+  assert.ok(!without.includes('<h2>Urgent</h2>') && !without.includes('unavailable this run'))
+})

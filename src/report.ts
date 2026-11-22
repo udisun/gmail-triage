@@ -195,7 +195,9 @@ export const renderReport = (r: ReportInput): string => {
 
   let body: string
   if (r.error !== null) {
-    body = `${head}<div class="err">${esc(r.error)}</div>${undo}`
+    // a failed classify still lists what is open; other errors have no open data and show only the error
+    const open = r.open === null ? null : openSections(r)
+    body = `${head}<div class="err">${esc(r.error)}</div>${open === null ? '' : `${open.urgent.html}${open.attention.html}`}${undo}`
   } else {
     const sub = `<p class="sub">${r.keptByFloor} kept in inbox by direct-mail rule, ${r.mode === 'dry' ? `would archive ${r.dupArchived} older duplicates` : `${r.dupArchived} older duplicates archived`}</p><p class="sub">${inboxText(r)}</p>${r.ifLive === null ? '' : `<p class="sub">If live: would archive ${r.ifLive.archive} (incl. ${r.ifLive.duplicates} older duplicates), keep ${r.ifLive.keep}</p>`}<p class="why">Kept earlier = kept by earlier runs (new replies there are re-checked next run).</p>`
     const open = openSections(r)

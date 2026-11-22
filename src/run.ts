@@ -145,6 +145,20 @@ const openInbox = (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, n
     return { urgent: aged(byName.get(LABEL_NAME.urgent)), attention: aged(byName.get(LABEL_NAME.attention)) }
   })
 
+// The thrown message can carry email content, so only its first line, stripped, reaches the local log.
+const classifyWithRetry = async (deps: Deps, batch: ThreadInput[], n: number): Promise<unknown> => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await deps.classify(batch, deps.pins)
+    } catch (e) {
+      console.error(`classify failed (batch ${n}, attempt ${attempt}): ${stripControl((e instanceof Error ? e.message : 'unknown error').split('\n')[0])}`)
+      if (attempt >= 2) {
+        throw e
+      }
+    }
+  }
+}
+
 export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<RunResult | null> => {
   const release = await acquireLock()
   if (release === null) {
@@ -186,36 +200,44 @@ export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<
 
     const buckets = new Map<string, { bucket: Bucket, reason: string }>()
     const keptIds = new Set<string>()
-    try {
-      for (let i = 0; i < threads.length; i += BATCH) {
-        const batch = threads.slice(i, i + BATCH)
-        const verdicts = validateVerdicts(batch, await deps.classify(batch, deps.pins))
-        for (const t of batch) {
-          const v = verdicts.get(t.threadId)!
-          const pinned = applyPins(t.from, v.bucket, deps.pins)
-          const bucket = applyDirectMailFloor(t, pinned)
-          if (bucket !== pinned) {
-            keptIds.add(t.threadId)
-          }
-          buckets.set(t.threadId, { bucket, reason: bucket === pinned ? v.reason : `${v.reason} (kept: direct mail)` })
-        }
+    const unclassified: ThreadInput[] = []
+    // one retry per batch; a batch that still fails stays in the inbox as failed rows and the other batches still apply
+    for (let i = 0; i < threads.length; i += BATCH) {
+      const batch = threads.slice(i, i + BATCH)
+      let raw: unknown
+      try {
+        raw = await classifyWithRetry(deps, batch, i / BATCH + 1)
+      } catch {
+        unclassified.push(...batch)
+        continue
       }
-    } catch (e) {
-      // the thrown message can carry email content, so the report gets a fixed one; the local log gets the first line
-      console.error(`classify failed: ${stripControl((e instanceof Error ? e.message : 'unknown error').split('\n')[0])}`)
-      return await finish(errorInput(date, mode, CLASSIFY_FAILED, deps.repo))
+      const verdicts = validateVerdicts(batch, raw)
+      for (const t of batch) {
+        const v = verdicts.get(t.threadId)!
+        const pinned = applyPins(t.from, v.bucket, deps.pins)
+        const bucket = applyDirectMailFloor(t, pinned)
+        if (bucket !== pinned) {
+          keptIds.add(t.threadId)
+        }
+        buckets.set(t.threadId, { bucket, reason: bucket === pinned ? v.reason : `${v.reason} (kept: direct mail)` })
+      }
     }
+    if (threads.length > 0 && unclassified.length === threads.length) {
+      // nothing classified: the error report still shows what is open in the inbox
+      return await finish({ ...errorInput(date, mode, CLASSIFY_FAILED, deps.repo), open: await openInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, deps.now()) })
+    }
+    const classified = threads.filter((t) => buckets.has(t.threadId))
 
-    const failed: string[] = []
-    const failedRows: FailedRow[] = []
+    const failed: string[] = unclassified.map((t) => t.threadId)
+    const failedRows: FailedRow[] = unclassified.map((t) => ({ threadId: t.threadId, from: t.from, subject: t.subject, reason: 'classify failed' }))
     const dupDone = new Map<string, number>()
     const done: ThreadInput[] = []
     if (dry) {
-      done.push(...threads)
+      done.push(...classified)
       for (const d of dupes) {
         dupDone.set(d.newest.threadId, d.older.length)
       }
-    } else if (threads.length > 0) {
+    } else if (classified.length > 0) {
       const retry = retryWith(budget)
       let exhausted = false
       let labelIds = {} as Awaited<ReturnType<typeof ensureLabels>>
@@ -269,7 +291,7 @@ export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<
         await saveState(state)
         return true
       }
-      for (const t of threads) {
+      for (const t of classified) {
         const { bucket } = buckets.get(t.threadId)!
         const action = actionFor(bucket)
         const labelId = labelIds[bucket]

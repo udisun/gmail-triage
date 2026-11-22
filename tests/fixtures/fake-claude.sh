@@ -14,6 +14,7 @@ case "$mode" in
   error) echo "$init"; echo "$asst"; echo '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}' ;;
   noresult) echo "$init"; echo "$asst" ;;
   hang) echo "$init"; exec sleep 30 ;;
+  hang-stderr) echo "$init"; printf 'API Error:\n  Connection error\n' >&2; exec sleep 30 ;;
   lateapikey) echo "$init"; echo "$badinit"; echo "$ok" ;;
   dupinit) echo "$init"; echo "$init"; echo "$ok" ;;
   resultfirst) echo "$ok"; echo "$init" ;;

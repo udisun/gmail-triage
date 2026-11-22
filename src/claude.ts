@@ -51,6 +51,7 @@ const spawnClaude = (prompt: string, args: string[], timeoutMs: number, cwd: str
   let stderr = ''
   let pending = ''
   let sawInit = false
+  let lastType = 'none'
   let result: Event | null = null
   const fail = (message: string): void => {
     if (settled) {
@@ -61,7 +62,8 @@ const spawnClaude = (prompt: string, args: string[], timeoutMs: number, cwd: str
     child.kill('SIGKILL')
     reject(new ClaudeError(message))
   }
-  const timer = setTimeout(() => fail(`claude timed out after ${timeoutMs} ms`), timeoutMs)
+  // one line for the local log: how far the stream got and the tail of stderr
+  const timer = setTimeout(() => fail(`claude timed out after ${timeoutMs} ms (last event: ${lastType}; stderr: ${stderr.replace(/\s+/g, ' ').trim().slice(-300) || 'empty'})`), timeoutMs)
   // Gate on the first event: exactly one init, safe, before anything else, so unsafe auth is killed before any paid work.
   const handleLine = (line: string): void => {
     if (line.trim() === '') {
@@ -78,6 +80,7 @@ const spawnClaude = (prompt: string, args: string[], timeoutMs: number, cwd: str
       fail('claude emitted a non-object event')
       return
     }
+    lastType = `${String(e.type).slice(0, 20)}${e.subtype ? `/${String(e.subtype).slice(0, 20)}` : ''}`
     const isInit = e.type === 'system' && e.subtype === 'init'
     if (!sawInit) {
       if (!isInit) {
