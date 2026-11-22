@@ -37,6 +37,7 @@ export type RunResult = { reportFile: string, input: ReportInput, failed: string
 const CAP = 300
 const BATCH = 20
 const COUNT_BUDGET_MS = 60_000
+const CLASSIFY_RETRY_MS = 15_000
 const COUNT_DEADLINE_MS = 60_000
 const AUTH_FAILED = 'Gmail authorization failed: run gmail-triage auth'
 const QUOTA_EXHAUSTED = 'Gmail quota exhausted, no changes were made to Gmail. Run again later.'
@@ -155,6 +156,8 @@ const classifyWithRetry = async (deps: Deps, batch: ThreadInput[], n: number): P
       if (attempt >= 2) {
         throw e
       }
+      // a dropped connection gets a moment to come back before the retry
+      await (deps.sleep ?? realSleep)(CLASSIFY_RETRY_MS)
     }
   }
 }
