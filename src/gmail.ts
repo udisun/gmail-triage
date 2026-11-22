@@ -175,6 +175,48 @@ export const fetchUnreadThreads = async (
   return { threads, skipped }
 }
 
+export type OpenRow = { threadId: string, from: string, subject: string, lastAt: number }
+export type OpenList = { total: number, rows: OpenRow[] }
+const OPEN_ROWS = 200
+
+// Read-only: inbox threads carrying each label (read or not); total counts every id, rows hold the newest OPEN_ROWS. A missing label is an empty list.
+export const listOpenByLabel = async (g: gmail_v1.Gmail, names: string[], budget: RetryBudget, signal?: AbortSignal): Promise<Map<string, OpenList>> => {
+  const { data } = await withRateLimitRetry(() => g.users.labels.list({ userId: 'me' }, { signal }), { budget })
+  const out = new Map<string, OpenList>()
+  for (const name of names) {
+    const labelId = data.labels?.find((l) => l.name === name)?.id
+    const ids: string[] = []
+    let pageToken: string | undefined
+    while (labelId) {
+      const token = pageToken
+      const page = (await withRateLimitRetry(() => g.users.threads.list({ userId: 'me', labelIds: ['INBOX', labelId], maxResults: LIST_PAGE, pageToken: token }, { signal }), { budget })).data
+      ids.push(...(page.threads ?? []).map((t) => t.id).filter((id): id is string => !!id))
+      pageToken = page.nextPageToken ?? undefined
+      if (!pageToken || ids.length >= COUNT_CAP) {
+        break
+      }
+    }
+    const rows: OpenRow[] = []
+    const want = ids.slice(0, OPEN_ROWS)
+    for (let i = 0; i < want.length; i += GET_CHUNK) {
+      const settled = await Promise.allSettled(want.slice(i, i + GET_CHUNK).map((id) => withRateLimitRetry(() => g.users.threads.get({ userId: 'me', id, format: 'metadata', metadataHeaders: ['From', 'Subject'] }, { signal }), { budget })))
+      for (const r of settled) {
+        if (r.status === 'rejected') {
+          throw r.reason
+        }
+        const t = r.value.data
+        const newest = (t.messages ?? []).reduce<gmail_v1.Schema$Message | null>((a, m) => a === null || Number(m.internalDate ?? 0) >= Number(a.internalDate ?? 0) ? m : a, null)
+        if (t.id && newest) {
+          const h = headerMap(newest)
+          rows.push({ threadId: t.id, from: h.get('from') ?? '', subject: h.get('subject') ?? '', lastAt: Number(newest.internalDate ?? 0) })
+        }
+      }
+    }
+    out.set(name, { total: ids.length, rows })
+  }
+  return out
+}
+
 // shortcut: resultSizeEstimate is approximate, fine for a "known sender" signal.
 export const senderCount30d = async (g: gmail_v1.Gmail, address: string, budget: RetryBudget = createRetryBudget()): Promise<number> => {
   const { data } = await withRateLimitRetry(() => g.users.threads.list({ userId: 'me', q: `from:${address} newer_than:30d`, maxResults: 1 }), { budget })
