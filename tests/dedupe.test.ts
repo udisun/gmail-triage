@@ -4,7 +4,7 @@ import { groupDuplicates as group } from '../src/dedupe.ts'
 import type { Pins, ThreadInput } from '../src/types.ts'
 
 const t = (threadId: string, over: Partial<ThreadInput> = {}): ThreadInput =>
-  ({ threadId, messageId: `m-${threadId}`, from: 'Datadog <digest@dtdg.co>', toOrCcMe: false, automated: true, humanDirectUnread: false, subject: 'Weekly digest', date: 'd', internalDate: 1000, allUnread: true, messageCount: 1, listId: null, listUnsubscribe: null, listUnsubscribePost: null, snippet: '', ...over })
+  ({ threadId, messageId: `m-${threadId}`, from: 'Datadog <digest@dtdg.co>', toOrCcMe: false, automated: true, humanDirectUnread: false, subject: 'Weekly digest', date: 'd', internalDate: 1000, allUnread: true, messageCount: 1, labelIds: [], listId: null, listUnsubscribe: null, listUnsubscribePost: null, snippet: '', ...over })
 const NO_PINS: Pins = { neverArchive: [], alwaysUrgent: [] }
 const groupDuplicates = (xs: ThreadInput[], pins: Pins = NO_PINS) => group(xs, pins)
 const ids = (xs: ThreadInput[]): string[] => xs.map((x) => x.threadId)

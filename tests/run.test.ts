@@ -13,7 +13,7 @@ beforeEach(() => {
   process.env.GMAIL_TRIAGE_HOME = mkdtempSync(join(tmpdir(), 'gt-run-'))
 })
 
-type Spec = { id: string, from?: string, to?: string, listUnsubscribe?: string, listUnsubscribePost?: string, direct?: boolean, autoSubmitted?: string, earlierHuman?: boolean, subject?: string, at?: string, listId?: string, readMsg?: boolean }
+type Spec = { id: string, from?: string, to?: string, listUnsubscribe?: string, listUnsubscribePost?: string, direct?: boolean, autoSubmitted?: string, earlierHuman?: boolean, subject?: string, at?: string, listId?: string, readMsg?: boolean, labels?: string[] }
 
 const gaxios = (status: number, reason: string): Error =>
   Object.assign(new Error('Quota exceeded SECRET'), { response: { status, data: { error: { errors: [{ reason }] } } } })
@@ -27,7 +27,7 @@ const fakeGmail = (specs: Spec[], opts: { failModify?: string[], newer?: string[
   const thread = (s: Spec) => ({
     id: s.id,
     messages: [...(s.readMsg ? [{ id: `r-${s.id}`, labelIds: ['INBOX'], internalDate: '50', snippet: 'read', payload: { headers: [] } }] : []),...(s.earlierHuman ? [{ id: `h-${s.id}`, labelIds: ['UNREAD', 'INBOX'], internalDate: '500', snippet: 'earlier', payload: { headers: [{ name: 'From', value: 'Jane <jane@y.com>' }, { name: 'To', value: 'me@x.com' }, { name: 'Subject', value: 'earlier' }] } }] : []), {
-      id: `m-${s.id}`, labelIds: ['UNREAD', 'INBOX'], internalDate: s.at ?? '1000', snippet: 'snip',
+      id: `m-${s.id}`, labelIds: ['UNREAD', 'INBOX', ...(s.labels ?? [])], internalDate: s.at ?? '1000', snippet: 'snip',
       payload: { headers: [
         { name: 'From', value: s.from ?? `Sender <${s.id}@x.com>` }, { name: 'To', value: s.to ?? (s.direct ? 'me@x.com' : 'list@x.com') }, { name: 'Subject', value: s.subject ?? `subj ${s.id}` },
         { name: 'Date', value: 'Sun, 15 Nov 2026 10:00:00 +0200' }, ...(s.listUnsubscribe ? [{ name: 'List-Unsubscribe', value: s.listUnsubscribe }] : []), ...(s.listUnsubscribePost ? [{ name: 'List-Unsubscribe-Post', value: s.listUnsubscribePost }] : []), ...(s.autoSubmitted ? [{ name: 'Auto-Submitted', value: s.autoSubmitted }] : []), ...(s.listId ? [{ name: 'List-Id', value: s.listId }] : []),
@@ -927,4 +927,19 @@ test('open lookup: a thread on both labels counts once, under urgent; a thread d
   assert.deepEqual(res.input.open.urgent.rest, [])
   assert.deepEqual(res.input.open.attention.rows.map((r) => r.threadId), ['x'])
   assert.deepEqual(res.input.open.attention.rest, [])
+})
+
+test('a re-triaged thread swaps its old bucket label for the new one, logs it, and undo puts it back', async () => {
+  await saveState({ mode: 'live', artifactUrl: null, processed: {} })
+  const { g, modifies } = fakeGmail([{ id: 'a', labels: [L('Attention'), 'Label_mine'] }, { id: 'b', labels: [L('Urgent')] }])
+  const res = await runTriage(mk(g, verdictsFor({ a: 'urgent', b: 'urgent' })), { dryRun: false })
+  assert.ok(res)
+  assert.deepEqual(modifies, [
+    { id: 'a', requestBody: { addLabelIds: [L('Urgent'), 'STARRED'], removeLabelIds: [L('Attention')] } },
+    { id: 'b', requestBody: { addLabelIds: [L('Urgent'), 'STARRED'], removeLabelIds: [] } },
+  ])
+  const run = await readRun('2026-11-15')
+  assert.deepEqual(run.map((e) => (e.kind === undefined || e.kind === 'triage' ? e.removedLabelIds : null)), [[L('Attention')], undefined])
+  await runUndo(async () => g, '2026-11-15', async () => undefined)
+  assert.deepEqual(modifies.slice(2).find((m) => m.id === 'a')?.requestBody, { addLabelIds: [L('Attention')], removeLabelIds: [L('Urgent'), 'STARRED'] })
 })

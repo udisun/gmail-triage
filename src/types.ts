@@ -13,6 +13,8 @@ export type ThreadInput = {
   // every message in the thread carries UNREAD; a dedupe undo can then restore read state exactly
   allUnread: boolean
   messageCount: number
+  // every label on any message of the thread
+  labelIds: string[]
   listId: string | null
   listUnsubscribe: string | null
   listUnsubscribePost: string | null

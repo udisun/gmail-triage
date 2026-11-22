@@ -25,7 +25,7 @@ beforeEach(() => {
 })
 
 const thread: ThreadInput = {
-  threadId: 't1', messageId: 'm1', from: 'a@x.com', toOrCcMe: true, automated: false, humanDirectUnread: true, subject: 's', date: 'd', internalDate: 0, allUnread: true, messageCount: 1, listId: null, listUnsubscribe: null, listUnsubscribePost: null, snippet: 'hi',
+  threadId: 't1', messageId: 'm1', from: 'a@x.com', toOrCcMe: true, automated: false, humanDirectUnread: true, subject: 's', date: 'd', internalDate: 0, allUnread: true, messageCount: 1, labelIds: [], listId: null, listUnsubscribe: null, listUnsubscribePost: null, snippet: 'hi',
 }
 
 test('ok returns structured output and result text', async () => {

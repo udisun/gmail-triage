@@ -10,7 +10,7 @@ export { homeDir }
 export type State = { mode: 'dry' | 'live', artifactUrl: string | null, processed: Record<string, string> }
 // opId is absent on logs and receipts written before operation ids existed.
 export type Undone = { threadId: string, messageId: string, opId?: string }
-export type TriageEntry = { kind?: 'triage', opId?: string, threadId: string, messageId: string, bucket: Bucket, labelId: string, starred: boolean, archived: boolean }
+export type TriageEntry = { kind?: 'triage', opId?: string, threadId: string, messageId: string, bucket: Bucket, labelId: string, starred: boolean, archived: boolean, removedLabelIds?: string[] }
 // An older duplicate copy: marked read, labeled and archived; undo restores UNREAD and INBOX.
 export type DedupeEntry = { kind: 'dedupe', opId?: string, threadId: string, messageId: string, labelId: string }
 // A read thread archived by archive-old: never in state.processed, undo restores INBOX only while messageId is still the newest.
@@ -80,7 +80,8 @@ const isEntry = (v: unknown): v is RunEntry =>
   isRecord(v) && typeof v.threadId === 'string' && typeof v.messageId === 'string' && typeof v.labelId === 'string' && validOpId(v.opId)
   && (v.kind === 'dedupe' || v.kind === 'archiveOld'
     ? v.labelId !== ''
-    : (v.kind === undefined || v.kind === 'triage') && typeof v.starred === 'boolean' && typeof v.archived === 'boolean' && (BUCKETS as readonly unknown[]).includes(v.bucket))
+    : (v.kind === undefined || v.kind === 'triage') && typeof v.starred === 'boolean' && typeof v.archived === 'boolean' && (BUCKETS as readonly unknown[]).includes(v.bucket)
+      && (v.removedLabelIds === undefined || (Array.isArray(v.removedLabelIds) && v.removedLabelIds.every((id) => typeof id === 'string' && id !== '' && id !== v.labelId))))
 
 const isUndone = (v: unknown): v is Undone => isRecord(v) && typeof v.threadId === 'string' && typeof v.messageId === 'string' && (v.opId === undefined || typeof v.opId === 'string')
 

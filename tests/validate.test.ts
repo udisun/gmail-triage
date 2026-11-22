@@ -4,7 +4,7 @@ import { validateVerdicts } from '../src/validate.ts'
 import type { ThreadInput } from '../src/types.ts'
 
 const input = (threadId: string, listUnsubscribe: string | null = null): ThreadInput => ({
-  threadId, messageId: `m-${threadId}`, from: 'a@x.com', toOrCcMe: true, automated: false, humanDirectUnread: true, subject: 's', date: 'd', internalDate: 0, allUnread: true, messageCount: 1, listId: null, listUnsubscribe, listUnsubscribePost: null, snippet: '',
+  threadId, messageId: `m-${threadId}`, from: 'a@x.com', toOrCcMe: true, automated: false, humanDirectUnread: true, subject: 's', date: 'd', internalDate: 0, allUnread: true, messageCount: 1, labelIds: [], listId: null, listUnsubscribe, listUnsubscribePost: null, snippet: '',
 })
 const fallback = { bucket: 'attention', reason: 'unclassified' }
 

@@ -238,3 +238,13 @@ test('an entry may not claim the reserved legacy: operation id prefix, nor an em
     await assert.rejects(readRun(`2026-12-0${i + 1}`), /not a valid entry/)
   }
 })
+
+test('removedLabelIds round-trips, and a malformed one (non-string, empty, or the added label) is corruption', async () => {
+  const swap: RunEntry = { threadId: 'a', messageId: 'm-a', bucket: 'receipts', labelId: 'L1', starred: false, archived: true, removedLabelIds: ['L2'] }
+  await appendRunEntry('2026-11-15', swap)
+  assert.deepEqual(await readRun('2026-11-15'), [swap])
+  for (const bad of [[1], [''], ['L1'], 'L2']) {
+    writeFileSync(runLog(), `${line('a')}\n${JSON.stringify({ ...entry('b'), removedLabelIds: bad })}\n`)
+    await assert.rejects(readRun('2026-11-15'), /line 2/, JSON.stringify(bad))
+  }
+})
