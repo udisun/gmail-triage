@@ -298,8 +298,10 @@ export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<
         const { bucket } = buckets.get(t.threadId)!
         const action = actionFor(bucket)
         const labelId = labelIds[bucket]
-        const entry: RunEntry = { opId: randomUUID(), threadId: t.threadId, messageId: t.messageId, bucket, labelId, starred: action.star, archived: action.archive }
-        if (await processOne(t, bucket, entry, (retry) => applyTriage(g.users.threads, t.threadId, triageBody(labelId, action), triageIds, retry))) {
+        // a re-triaged thread loses its previous bucket label; the entry logs it so undo can put it back
+        const stale = t.labelIds.filter((id) => triageIds.has(id) && id !== labelId)
+        const entry: RunEntry = { opId: randomUUID(), threadId: t.threadId, messageId: t.messageId, bucket, labelId, starred: action.star, archived: action.archive, ...(stale.length > 0 ? { removedLabelIds: stale } : {}) }
+        if (await processOne(t, bucket, entry, (retry) => applyTriage(g.users.threads, t.threadId, triageBody(labelId, action, stale), triageIds, retry))) {
           done.push(t)
         }
       }

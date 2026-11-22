@@ -305,3 +305,20 @@ test('undo of an archive-old entry may add INBOX and remove its label only', asy
     assert.equal(c.length, 0)
   }
 })
+
+test('triage may swap bucket labels but never add and remove the same label or touch a user label', async () => {
+  assert.deepEqual(triageBody('L1', { star: false, archive: true }, ['L2']), body(['L1'], ['INBOX', 'L2']))
+  const { api, calls } = fakeThreads()
+  await applyTriage(api, 't1', body(['L1'], ['L2']), triageIds)
+  assert.equal(calls.length, 1)
+  for (const b of [body(['L1'], ['L1']), body(['L1'], ['Label_9']), body(['L1', 'STARRED'], ['STARRED'])]) {
+    assert.throws(() => assertTriageBody(b, triageIds))
+  }
+})
+
+test('a triage undo may re-add only the bucket labels its entries logged as removed', () => {
+  assert.doesNotThrow(() => assertUndoBody(body(['L2'], ['L1']), logged, false, new Set(['L2'])))
+  assert.throws(() => assertUndoBody(body(['L2'], ['L1']), logged))
+  assert.throws(() => assertUndoBody(body(['L3'], ['L1']), logged, false, new Set(['L2'])))
+  assert.throws(() => assertUndoBody(body(['L1'], ['L1']), logged, false, new Set(['L1'])))
+})

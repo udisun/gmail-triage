@@ -19,9 +19,10 @@ const SYSTEM_LABELS = new Set(['', INBOX, UNREAD, STARRED, 'TRASH', 'SPAM'])
 
 export type LabelIds = Record<Bucket, string> & { duplicate: string, archivedOld: string }
 
-export const triageBody = (labelId: string, action: { star: boolean, archive: boolean }): ModifyBody => ({
+// stale: other bucket labels a re-triaged thread still carries, so it ends with exactly one
+export const triageBody = (labelId: string, action: { star: boolean, archive: boolean }, stale: string[] = []): ModifyBody => ({
   addLabelIds: action.star ? [labelId, STARRED] : [labelId],
-  removeLabelIds: action.archive ? [INBOX] : [],
+  removeLabelIds: [...(action.archive ? [INBOX] : []), ...stale],
 })
 
 // The only body that changes read state: older duplicate copies, one shared label, never an add of UNREAD.
@@ -64,6 +65,9 @@ const assertWithin = (b: ModifyBody, addOk: Set<string>, removeOk: Set<string>):
   if (b.addLabelIds.length === 0 && b.removeLabelIds.length === 0) {
     throw new Error('empty modify body')
   }
+  if (b.addLabelIds.some((id) => b.removeLabelIds.includes(id))) {
+    throw new Error('label both added and removed')
+  }
   for (const id of b.addLabelIds) {
     if (!addOk.has(id)) {
       throw new Error(`forbidden add label: ${id}`)
@@ -77,7 +81,7 @@ const assertWithin = (b: ModifyBody, addOk: Set<string>, removeOk: Set<string>):
 }
 
 export const assertTriageBody = (b: ModifyBody, triageLabelIds: Set<string>): void => {
-  assertWithin(snapshot(b), new Set([...triageLabelIds, STARRED]), new Set([INBOX]))
+  assertWithin(snapshot(b), new Set([...triageLabelIds, STARRED]), new Set([INBOX, ...triageLabelIds]))
 }
 
 export const assertDedupeBody = (b: ModifyBody, dupLabelId: string): void => {
@@ -105,7 +109,8 @@ export const assertArchiveOldBody = (b: ModifyBody, labelId: string): void => {
 }
 
 // UNREAD may be re-added only when undoing a dedupe entry (mode true), whose loggedLabelIds hold just the dup label; an archive-old undo may only add INBOX and remove its label.
-export const assertUndoBody = (b: ModifyBody, loggedLabelIds: Set<string>, mode: boolean | 'archiveOld' = false): void => {
+// restoreOk: bucket labels a triage entry logged as removed, the only labels a triage undo may add besides INBOX.
+export const assertUndoBody = (b: ModifyBody, loggedLabelIds: Set<string>, mode: boolean | 'archiveOld' = false, restoreOk: Set<string> = new Set()): void => {
   if (mode === true) {
     assertWithin(snapshot(b), new Set([INBOX, UNREAD]), loggedLabelIds)
     return
@@ -114,7 +119,7 @@ export const assertUndoBody = (b: ModifyBody, loggedLabelIds: Set<string>, mode:
     assertWithin(snapshot(b), new Set([INBOX]), loggedLabelIds)
     return
   }
-  assertWithin(snapshot(b), new Set([INBOX]), new Set([...loggedLabelIds, STARRED]))
+  assertWithin(snapshot(b), new Set([INBOX, ...restoreOk]), new Set([...loggedLabelIds, STARRED]))
 }
 
 export const applyTriage = async (threads: ThreadsApi, threadId: string, b: ModifyBody, triageLabelIds: Set<string>, retry: Retry = direct): Promise<void> => {
@@ -135,9 +140,9 @@ export const applyArchiveOld = async (threads: ThreadsApi, threadId: string, b: 
   await retry(() => threads.modify({ userId: 'me', id: threadId, requestBody: snap }))
 }
 
-export const applyUndo = async (threads: ThreadsApi, threadId: string, b: ModifyBody, loggedLabelIds: Set<string>, retry: Retry = direct, mode: boolean | 'archiveOld' = false): Promise<void> => {
+export const applyUndo = async (threads: ThreadsApi, threadId: string, b: ModifyBody, loggedLabelIds: Set<string>, retry: Retry = direct, mode: boolean | 'archiveOld' = false, restoreOk: Set<string> = new Set()): Promise<void> => {
   const snap = snapshot(b)
-  assertUndoBody(snap, loggedLabelIds, mode)
+  assertUndoBody(snap, loggedLabelIds, mode, restoreOk)
   await retry(() => threads.modify({ userId: 'me', id: threadId, requestBody: snap }))
 }
 

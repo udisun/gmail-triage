@@ -117,6 +117,7 @@ export const toThreadInput = (t: gmail_v1.Schema$Thread, me: string, myAddresses
     internalDate: Number(latest.internalDate ?? 0),
     allUnread: unread.length === (t.messages ?? []).length,
     messageCount: (t.messages ?? []).length,
+    labelIds: [...new Set((t.messages ?? []).flatMap((m) => m.labelIds ?? []))],
     listId: h.get('list-id') ?? null,
     listUnsubscribe: h.get('list-unsubscribe') ?? null,
     listUnsubscribePost: h.get('list-unsubscribe-post') ?? null,

@@ -35,7 +35,7 @@ test('the LAST angle-bracket address wins, so a spoofed display name cannot matc
 })
 
 const thread = (over: Partial<ThreadInput> = {}): ThreadInput =>
-  ({ threadId: 't', messageId: 'm', from: 'a@x.com', toOrCcMe: true, automated: false, humanDirectUnread: true, subject: 's', date: 'd', internalDate: 0, allUnread: true, messageCount: 1, listId: null, listUnsubscribe: null, listUnsubscribePost: null, snippet: '', ...over })
+  ({ threadId: 't', messageId: 'm', from: 'a@x.com', toOrCcMe: true, automated: false, humanDirectUnread: true, subject: 's', date: 'd', internalDate: 0, allUnread: true, messageCount: 1, labelIds: [], listId: null, listUnsubscribe: null, listUnsubscribePost: null, snippet: '', ...over })
 const ARCHIVE: Bucket[] = ['notifications', 'outreach', 'receipts', 'nonwork', 'unsubscribe']
 
 test('direct-mail floor: every archive bucket becomes attention when a human direct message is unread', () => {
