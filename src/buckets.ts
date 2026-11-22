@@ -18,6 +18,10 @@ export const DUPLICATE_LABEL = 'Triage/Duplicate'
 // Not a classifier bucket: only the one-time archive-old command uses it.
 export const ARCHIVED_OLD_LABEL = 'Triage/Archived-old'
 
+// Not classifier buckets: the daily sweep's audit labels for superseded or recovered alerts and quiet attention threads.
+export const RESOLVED_LABEL = 'Triage/Resolved'
+export const STALE_LABEL = 'Triage/Stale'
+
 export const actionFor = (b: Bucket): { star: boolean, archive: boolean } => {
   if (b === 'urgent') {
     return { star: true, archive: false }
@@ -31,8 +35,8 @@ export const actionFor = (b: Bucket): { star: boolean, archive: boolean } => {
 // owner and work come from pins.json, so the prompt can name the mailbox owner and their company.
 export const bucketDefinitions = ({ owner = 'the mailbox owner', work = `${owner}'s work` }: { owner?: string, work?: string } = {}): string => [
   `urgent: needs action today — deadlines, outages, security, partners waiting on ${owner}`,
-  `attention: a real person or system wants something from ${owner}, but not today`,
-  'notifications: automated mail — code hosting, CI, monitoring, issue trackers, cloud providers, workspace admin',
+  `attention: a person is waiting on ${owner} — a reply, decision, review or signature — but not today; includes forms a person submitted (vulnerability reports, data requests), access or usage requests from teammates, failed or expired payment methods, and security advisories asking to rotate credentials`,
+  'notifications: automated mail — code hosting, CI, monitoring, issue trackers, cloud providers, workspace admin, anomaly and usage reports, and tools or vendors asking to review settings ("action required" notices nobody is personally waiting on)',
   'outreach: cold sales and vendor pitches',
   'receipts: invoices, receipts, billing confirmations',
   `nonwork: not related to ${work}`,

@@ -21,6 +21,8 @@ import { addCapture, writeUnsubCapture } from './unsubscribe.ts'
 import type { UnsubEntry } from './unsubscribe.ts'
 import type { Bucket, Pins, ThreadInput } from './types.ts'
 import { validateVerdicts } from './validate.ts'
+import { applySweep, listRecoveries, planSweep } from './sweep.ts'
+import type { SweepPlan } from './sweep.ts'
 
 // The structural subset of gmail_v1.Gmail that a run uses; the real client satisfies it.
 export type GmailLike = {
@@ -79,7 +81,7 @@ const retryTriage = (g: GmailLike, t: ThreadInput, budget: RetryBudget): Retry =
 const undoCtx = (repo: string): { repo: string, home: string | null } => ({ repo, home: process.env.GMAIL_TRIAGE_HOME ?? null })
 
 export const errorInput = (date: string, mode: 'dry' | 'live', error: string, repo: string): ReportInput =>
-  ({ date, mode, keptByFloor: 0, inbox: null, open: null, ifLive: null, ...undoCtx(repo), rows: [], failed: [], dupes: [], dupArchived: 0, dupProtected: 0, unsub: [], error })
+  ({ date, mode, keptByFloor: 0, inbox: null, open: null, swept: null, ifLive: null, ...undoCtx(repo), rows: [], failed: [], dupes: [], dupArchived: 0, dupProtected: 0, unsub: [], error })
 
 // Newest message still carrying UNREAD: our own sent replies must not block triage.
 const newestUnreadId = async (g: GmailLike, id: string, budget: RetryBudget): Promise<string | null> => {
@@ -138,13 +140,39 @@ const countInbox = (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, 
     return split
   })
 
+const OPEN_NAMES = [LABEL_NAME.urgent, LABEL_NAME.attention]
+
+// Report shape: aged against now, minus threads the sweep archived.
+const agedOpen = (byName: Map<string, OpenList>, now: Date, gone: Set<string> = new Set()): OpenInbox => {
+  const aged = (l: OpenList | undefined) => ({ rest: (l?.rest ?? []).filter((id) => !gone.has(id)), rows: (l?.rows ?? []).filter((r) => !gone.has(r.threadId)).map(({ lastAt, messageId: _m, ...r }) => ({ ...r, ageDays: Math.max(0, Math.floor((now.getTime() - lastAt) / 86_400_000)) })) })
+  return { urgent: aged(byName.get(LABEL_NAME.urgent)), attention: aged(byName.get(LABEL_NAME.attention)) }
+}
+
 // Urgent and attention threads still in the inbox from any run, aged against now.
-const openInbox = (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, now: Date): Promise<OpenInbox | null> =>
-  withDeadline(deadlineMs, async (signal) => {
-    const byName = await listOpenByLabel(g, [LABEL_NAME.urgent, LABEL_NAME.attention], budget, signal)
-    const aged = (l: OpenList | undefined) => ({ rest: l?.rest ?? [], rows: (l?.rows ?? []).map(({ lastAt, ...r }) => ({ ...r, ageDays: Math.max(0, Math.floor((now.getTime() - lastAt) / 86_400_000)) })) })
-    return { urgent: aged(byName.get(LABEL_NAME.urgent)), attention: aged(byName.get(LABEL_NAME.attention)) }
-  })
+const openInbox = async (g: gmail_v1.Gmail, budget: RetryBudget, deadlineMs: number, now: Date): Promise<OpenInbox | null> => {
+  const byName = await withDeadline(deadlineMs, (signal) => listOpenByLabel(g, OPEN_NAMES, budget, signal))
+  return byName === null ? null : agedOpen(byName, now)
+}
+
+// Plans the sweep from the open list; a dry run or an empty plan writes nothing, and a failed recovery lookup only drops the recovery rule.
+const sweepOpen = async (g: GmailLike, byName: Map<string, OpenList>, dry: boolean, date: string, deps: Deps, budget: RetryBudget): Promise<SweepPlan> => {
+  const recoveries = await withDeadline(deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (signal) => listRecoveries(g as unknown as gmail_v1.Gmail, budget, signal)) ?? new Map<string, number>()
+  const plan = planSweep(byName, recoveries, deps.now().getTime())
+  if (dry || plan.resolved.length + plan.stale.length === 0) {
+    return plan
+  }
+  try {
+    const labels = await ensureLabels(g.users.labels, retryWith(budget))
+    const { done, failed } = await applySweep(g.users.threads, plan, labels, date, budget)
+    if (failed > 0) {
+      console.error(`sweep: ${failed} thread(s) not archived`)
+    }
+    return done
+  } catch {
+    console.error('sweep: could not resolve its labels, nothing archived')
+    return { resolved: [], stale: [] }
+  }
+}
 
 // The thrown message can carry email content, so only its first line, stripped, reaches the local log.
 const classifyWithRetry = async (deps: Deps, batch: ThreadInput[], n: number): Promise<unknown> => {
@@ -252,7 +280,7 @@ export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<
         }
         exhausted = true
       }
-      const { duplicate: _dup, archivedOld: _old, ...bucketIds } = labelIds
+      const { duplicate: _dup, archivedOld: _old, resolved: _res, stale: _stale, ...bucketIds } = labelIds
       const triageIds = new Set(Object.values(bucketIds))
       // one per-thread flow for triage and dedupe: recheck for new mail, log, guarded write, then the processed marker
       const processOne = async (t: ThreadInput, bucket: Bucket | undefined, entry: RunEntry, apply: (retry: Retry) => Promise<void>): Promise<boolean> => {
@@ -326,11 +354,15 @@ export const runTriage = async (deps: Deps, opts: { dryRun: boolean }): Promise<
     // a dry run writes nothing, so it retained nothing: the split counts the real inbox
     const keptToday = new Set(dry ? [] : [...retained.map((t) => t.threadId), ...protectedOlder.map((t) => t.threadId)])
     const touched = new Set(fetched.threads.map((t) => t.threadId))
-    const [inbox, open] = await Promise.all([countInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (id) => keptToday.has(id) ? 'today' : state.processed[id] !== undefined && !touched.has(id) ? 'earlier' : 'triage'),
-      openInbox(g as unknown as gmail_v1.Gmail, createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep }), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, deps.now())])
+    const countBudget = () => createRetryBudget({ maxSleepMs: COUNT_BUDGET_MS, sleep: deps.sleep ?? realSleep })
+    const rawOpen = await withDeadline(deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (signal) => listOpenByLabel(g as unknown as gmail_v1.Gmail, OPEN_NAMES, countBudget(), signal))
+    // the sweep archives before the count, so the split and the open list match the inbox it leaves
+    const swept = rawOpen === null ? null : await sweepOpen(g, rawOpen, dry, date, deps, countBudget())
+    const open = rawOpen === null ? null : agedOpen(rawOpen, deps.now(), dry || swept === null ? new Set() : new Set([...swept.resolved, ...swept.stale].map((r) => r.threadId)))
+    const inbox = await countInbox(g as unknown as gmail_v1.Gmail, countBudget(), deps.countDeadlineMs ?? COUNT_DEADLINE_MS, (id) => keptToday.has(id) ? 'today' : state.processed[id] !== undefined && !touched.has(id) ? 'earlier' : 'triage')
     // the dry run's own decisions, never derived from the listing
     const ifLive = dry ? { archive: done.length - retained.length + dupArchived, duplicates: dupArchived, keep: retained.length + protectedOlder.length } : null
-    return await finish({ date, mode, keptByFloor: done.filter((t) => keptIds.has(t.threadId)).length, inbox, open, ifLive, ...undoCtx(deps.repo), rows, failed: failedRows, dupes: dupRows, dupArchived, dupProtected: protectedOlder.length, unsub, error: null }, failed)
+    return await finish({ date, mode, keptByFloor: done.filter((t) => keptIds.has(t.threadId)).length, inbox, open, swept, ifLive, ...undoCtx(deps.repo), rows, failed: failedRows, dupes: dupRows, dupArchived, dupProtected: protectedOlder.length, unsub, error: null }, failed)
   } finally {
     await release()
   }

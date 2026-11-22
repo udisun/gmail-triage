@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { applyArchiveOld, applyDedupe, applyTriage, applyUndo, archiveOldBody, assertArchiveOldBody, assertDedupeBody, assertTriageBody, assertUndoBody, dedupeBody, ensureLabels, triageBody } from '../src/gmailWrite.ts'
 import type { LabelsApi, ModifyBody, Retry, ThreadsApi } from '../src/gmailWrite.ts'
-import { ARCHIVED_OLD_LABEL, DUPLICATE_LABEL, LABEL_NAME } from '../src/buckets.ts'
+import { ARCHIVED_OLD_LABEL, DUPLICATE_LABEL, LABEL_NAME, RESOLVED_LABEL, STALE_LABEL } from '../src/buckets.ts'
 
 const fakeThreads = () => {
   const calls: Parameters<ThreadsApi['modify']>[0][] = []
@@ -53,9 +53,9 @@ test('undo rejects anything outside the allowlist with zero calls', async () => 
   }
 })
 
-test('ensureLabels creates only the missing labels (buckets plus Triage/Duplicate and Triage/Archived-old) and returns 9 ids', async () => {
+test('ensureLabels creates only the missing labels (buckets plus the duplicate, archived-old, resolved and stale audit labels) and returns 11 ids', async () => {
   const created: string[] = []
-  const names = [...Object.values(LABEL_NAME), DUPLICATE_LABEL, ARCHIVED_OLD_LABEL]
+  const names = [...Object.values(LABEL_NAME), DUPLICATE_LABEL, ARCHIVED_OLD_LABEL, RESOLVED_LABEL, STALE_LABEL]
   const api: LabelsApi = {
     list: async () => ({ data: { labels: [
       { id: 'x1', name: 'INBOX' },
@@ -69,13 +69,13 @@ test('ensureLabels creates only the missing labels (buckets plus Triage/Duplicat
     },
   }
   const ids = await ensureLabels(api)
-  assert.equal(created.length, 6)
+  assert.equal(created.length, 8)
   assert.ok(created.includes(DUPLICATE_LABEL) && created.includes(ARCHIVED_OLD_LABEL))
   for (const n of created) {
     assert.ok(names.includes(n))
   }
-  assert.equal(Object.keys(ids).length, 9)
-  assert.equal(new Set(Object.values(ids)).size, 9)
+  assert.equal(Object.keys(ids).length, 11)
+  assert.equal(new Set(Object.values(ids)).size, 11)
   assert.equal(ids.urgent, 'e1')
 })
 
@@ -153,8 +153,8 @@ test('the same wrapper retries undo and label calls', async () => {
   await applyUndo(api, 't1', body(['INBOX'], ['L1']), logged, retryOnce().retry)
   assert.deepEqual(sent, [body(['INBOX'], ['L1']), body(['INBOX'], ['L1'])])
   let lists = 0
-  const labels: LabelsApi = { list: async () => { if (lists++ === 0) { throw new Error('429') } return { data: { labels: [...Object.values(LABEL_NAME), DUPLICATE_LABEL, ARCHIVED_OLD_LABEL].map((name, i) => ({ id: `e${i}`, name })) } } }, create: async () => ({ data: {} }) }
-  assert.equal(Object.keys(await ensureLabels(labels, retryOnce().retry)).length, 9)
+  const labels: LabelsApi = { list: async () => { if (lists++ === 0) { throw new Error('429') } return { data: { labels: [...Object.values(LABEL_NAME), DUPLICATE_LABEL, ARCHIVED_OLD_LABEL, RESOLVED_LABEL, STALE_LABEL].map((name, i) => ({ id: `e${i}`, name })) } } }, create: async () => ({ data: {} }) }
+  assert.equal(Object.keys(await ensureLabels(labels, retryOnce().retry)).length, 11)
   assert.equal(lists, 2)
 })
 

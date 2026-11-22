@@ -176,7 +176,7 @@ export const fetchUnreadThreads = async (
   return { threads, skipped }
 }
 
-export type OpenRow = { threadId: string, from: string, subject: string, lastAt: number }
+export type OpenRow = { threadId: string, messageId: string, from: string, subject: string, lastAt: number }
 // rest: ids listed but past OPEN_ROWS, never fetched
 export type OpenList = { rows: OpenRow[], rest: string[] }
 const OPEN_ROWS = 200
@@ -214,9 +214,9 @@ export const listOpenByLabel = async (g: gmail_v1.Gmail, names: string[], budget
         }
         const t = r.value.data
         const newest = (t.messages ?? []).reduce<gmail_v1.Schema$Message | null>((a, m) => a === null || Number(m.internalDate ?? 0) >= Number(a.internalDate ?? 0) ? m : a, null)
-        if (t.id && newest) {
+        if (t.id && newest?.id) {
           const h = headerMap(newest)
-          rows.push({ threadId: t.id, from: h.get('from') ?? '', subject: h.get('subject') ?? '', lastAt: Number(newest.internalDate ?? 0) })
+          rows.push({ threadId: t.id, messageId: newest.id, from: h.get('from') ?? '', subject: h.get('subject') ?? '', lastAt: Number(newest.internalDate ?? 0) })
         }
       }
     }

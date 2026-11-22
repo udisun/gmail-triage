@@ -1,4 +1,4 @@
-import { ARCHIVED_OLD_LABEL, BUCKETS, DUPLICATE_LABEL, LABEL_NAME } from './buckets.ts'
+import { ARCHIVED_OLD_LABEL, BUCKETS, DUPLICATE_LABEL, LABEL_NAME, RESOLVED_LABEL, STALE_LABEL } from './buckets.ts'
 import type { Bucket } from './types.ts'
 
 export type ModifyBody = { addLabelIds: string[], removeLabelIds: string[] }
@@ -17,7 +17,7 @@ const INBOX = 'INBOX'
 const UNREAD = 'UNREAD'
 const SYSTEM_LABELS = new Set(['', INBOX, UNREAD, STARRED, 'TRASH', 'SPAM'])
 
-export type LabelIds = Record<Bucket, string> & { duplicate: string, archivedOld: string }
+export type LabelIds = Record<Bucket, string> & { duplicate: string, archivedOld: string, resolved: string, stale: string }
 
 // stale: other bucket labels a re-triaged thread still carries, so it ends with exactly one
 export const triageBody = (labelId: string, action: { star: boolean, archive: boolean }, stale: string[] = []): ModifyBody => ({
@@ -155,7 +155,7 @@ export const ensureLabels = async (labels: LabelsApi, retry: Retry = direct): Pr
     }
   }
   const ids: Record<string, string> = {}
-  const wanted: [string, string][] = [...BUCKETS.map((b): [string, string] => [b, LABEL_NAME[b]]), ['duplicate', DUPLICATE_LABEL], ['archivedOld', ARCHIVED_OLD_LABEL]]
+  const wanted: [string, string][] = [...BUCKETS.map((b): [string, string] => [b, LABEL_NAME[b]]), ['duplicate', DUPLICATE_LABEL], ['archivedOld', ARCHIVED_OLD_LABEL], ['resolved', RESOLVED_LABEL], ['stale', STALE_LABEL]]
   for (const [key, name] of wanted) {
     let id = existing.get(name)
     if (!id) {
